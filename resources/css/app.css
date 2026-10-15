@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        color-scheme: dark;
+    }
+
+    html {
+        @apply antialiased;
+    }
+
+    body {
+        @apply bg-noc-bg font-sans text-noc-text;
+    }
+
+    /* One focus treatment for the whole app (R-32).
+       Never removed, never replaced by an outline: none rule. */
+    :focus-visible {
+        @apply outline-none;
+        box-shadow: 0 0 0 2px #09090b, 0 0 0 4px #9fe870;
+        border-radius: 4px;
+    }
+
+    /* Motion marks a state change and stops (DESIGN.md, R-19) */
+    @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+            scroll-behavior: auto !important;
+        }
+    }
+
+    /* Tabular figures for IPs, ports, latency, percentages, log timestamps */
+    .tabular {
+        @apply font-mono tabular-nums;
+    }
+
+    /* Small uppercase label: field and column labels only, never a section eyebrow */
+    .field-label {
+        @apply text-[11px] font-medium uppercase tracking-wide text-noc-muted;
+    }
+}
+
+@layer components {
+    /* Card surface is solid. Glass is reserved for the top bar (R-10). */
+    .noc-card {
+        @apply rounded-md border border-noc-border bg-noc-surface;
+    }
+
+    .status-up {
+        @apply border-status-up/30 bg-status-up/10 text-status-up;
+    }
+    .status-degraded {
+        @apply border-status-degraded/30 bg-status-degraded/10 text-status-degraded;
+    }
+    .status-down {
+        @apply border-status-down/40 bg-status-down/10 text-status-down;
+    }
+    .status-maintenance {
+        @apply border-status-maintenance/30 bg-status-maintenance/10 text-status-maintenance;
+    }
+    .status-pending {
+        @apply border-noc-border bg-white/5 text-noc-muted;
+    }
+
+    .btn {
+        @apply inline-flex items-center justify-center gap-2 rounded-sm px-4 py-2 text-sm font-semibold
+            transition-colors disabled:cursor-not-allowed disabled:opacity-60;
+    }
+    .btn-primary {
+        @apply btn bg-noc-accent text-zinc-950 hover:bg-[#b0ef8c];
+    }
+    .btn-secondary {
+        @apply btn bg-white/5 text-noc-text hover:bg-white/10;
+    }
+    .btn-ghost {
+        @apply btn border border-noc-border text-noc-text hover:bg-white/5;
+    }
+
+    .input {
+        @apply w-full rounded-sm border border-noc-border bg-noc-bg px-3 py-2 text-sm text-noc-text
+            placeholder:text-zinc-500 focus:border-noc-accent/60;
+    }
+
+    /* Minimum 44px tap target on touch devices (R-03) */
+    .tap-target {
+        @apply min-h-[44px] min-w-[44px];
+    }
+}
+
+/* ============================================================
+   PDF print stylesheet, light theme, no animation
+   (docs/referensi-design.md §6.1 & §8.4)
+   ============================================================ */
+@media print {
+    @page {
+        size: A4 portrait;
+        margin: 15mm;
+    }
+
+    html,
+    body {
+        background: #ffffff !important;
+        color: #0f172a !important;
+    }
+}
+
+.pdf-body {
+    background: #ffffff;
+    color: #0f172a;
+    font-family: Inter, Helvetica, Arial, sans-serif;
+}
+
+.pdf-body * {
+    animation: none !important;
+    transition: none !important;
+}
