@@ -16,7 +16,7 @@ class CredentialEncryptionService
 
     public function __construct()
     {
-        $key = (string) env('APP_ENCRYPTION_KEY', '');
+        $key = (string) config('monitoring.credential_encryption_key', '');
         if ($key === '') {
             // Fallback to app key so local dev works; production must set APP_ENCRYPTION_KEY.
             $key = (string) config('app.key');

@@ -1,0 +1,98 @@
+# docker-compose.lite.yml — varian ringan TANPA service Postgres dan TANPA Redis.
+#
+# KEPUTUSAN: DB EKSTERNAL (bukan sqlite). Alasan: migrasi KERAS butuh Postgres
+#  - database/migrations/2026_01_01_000003_create_monitoring_logs_table.php:
+#    DDL mentah `... PARTITION BY RANGE (checked_at)` + partisi bulanan.
+#  - 0001_01_01_000000_create_users_table.php: `CREATE EXTENSION pgcrypto`,
+#    kolom `jsonb`, CHECK constraint via DB::statement, sintaks Postgres
+#    (`DROP CONSTRAINT IF EXISTS`, partial index `WHERE ...`).
+#  SQLite TIDAK bisa menjalankan DDL di atas, jadi sqlite rusak -> jangan dipakai.
+#
+# PENYESUAIAN .env / environment yang perlu diisi sebelum `up`:
+#  - DB_HOST       : host Postgres 16 eksternal yang reachable dari container
+#                    (default host.docker.internal = Postgres di host laptop;
+#                    di Linux ganti dengan IP/hostname, mis. 192.168.1.10).
+#                    DB_PORT / DB_DATABASE / DB_USERNAME / DB_PASSWORD ikut via env.
+#  - OPSLIRA_RUNNER_TOKEN : wajib sama antara web & runner (auth /internal).
+#  - Cache/session/queue TANPA redis: CACHE_STORE=file, SESSION_DRIVER=file,
+#    QUEUE_CONNECTION=sync (ketiganya didukung config/*.php + .env.example).
+#    REDIS_* sengaja TIDAK di-set (diabaikan).
+#
+# BATASAN DIKETAHUI (tanpa ubah source, sesuai aturan tugas):
+#  - App\Modules\Probes\Services\TargetStateService memakai Redis facade
+#    SECARA LANGSUNG (Redis::get/setex/incr/expire/del) untuk state probe
+#    target:state:{uuid} / target:failures:{id}. Tanpa Redis, eksekusi probe
+#    dan sebagian dashboard gagal koneksi Redis. Cache:: (whois/beszel) aman
+#    karena ikut CACHE_STORE=file. Perlu Redis lagi bila probe harus jalan.
+
+services:
+  # Nginx + Laravel app (FPM) — exposed on :8080
+  # NET_RAW required for ICMP ping, which now runs inside FPM.
+  monitoring-web:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    container_name: monitoring-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    cap_add:
+      - NET_RAW
+    environment:
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Jakarta}
+      # Postgres eksternal — TIDAK ada service postgres di file ini.
+      DB_CONNECTION: pgsql
+      DB_HOST: ${DB_HOST:-host.docker.internal}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_DATABASE: ${DB_DATABASE:-internal_monitoring}
+      DB_USERNAME: ${DB_USERNAME:-mon_admin}
+      DB_PASSWORD: ${DB_PASSWORD:-change-me-strong-password}
+      # Tanpa Redis: file/database/sync (lihat config/cache.php,
+      # config/session.php, config/queue.php). REDIS_* diabaikan.
+      CACHE_STORE: ${CACHE_STORE:-file}
+      SESSION_DRIVER: ${SESSION_DRIVER:-file}
+      QUEUE_CONNECTION: sync
+      GOTENBERG_URL: http://monitoring-gotenberg:3000
+      OPSLIRA_RUNNER_TOKEN: ${OPSLIRA_RUNNER_TOKEN:-}
+    volumes:
+      - report_storage:/var/www/html/storage/app/reports
+      - lite_cache:/var/www/html/storage/framework/cache
+      - lite_sessions:/var/www/html/storage/framework/sessions
+    depends_on:
+      - monitoring-gotenberg
+
+  # Go runner — satu-satunya pemilik kerja periodik: scheduling probe,
+  # dispatch report, rollup dan partition prune. Eksekusi probe tetap di PHP
+  # lewat endpoint internal monitoring-web. Tidak menyentuh DB/Redis langsung.
+  monitoring-runner:
+    build:
+      context: .
+      dockerfile: docker/runner/Dockerfile
+    container_name: monitoring-runner
+    restart: unless-stopped
+    environment:
+      OPSLIRA_BASE_URL: http://monitoring-web
+      OPSLIRA_RUNNER_TOKEN: ${OPSLIRA_RUNNER_TOKEN:-}
+      PROBE_CONCURRENCY: "8"
+      RUNNER_TICK_SECONDS: "15"
+      RUNNER_TIMEZONE: Asia/Jakarta
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/healthz >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - monitoring-web
+      - monitoring-gotenberg
+
+  # Gotenberg — headless Chromium HTML->PDF (bukan redis/postgres, tetap ada)
+  monitoring-gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: monitoring-gotenberg
+    restart: unless-stopped
+
+volumes:
+  lite_cache:
+  lite_sessions:
+  report_storage:

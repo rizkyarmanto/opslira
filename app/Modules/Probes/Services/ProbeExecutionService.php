@@ -21,6 +21,7 @@ class ProbeExecutionService
         private readonly ProbeAdapterFactory $factory,
         private readonly TargetStateService $state,
         private readonly CredentialEncryptionService $encryption,
+        private readonly ProbeFailureLogger $failures,
     ) {
     }
 
@@ -35,6 +36,7 @@ class ProbeExecutionService
         $result = $adapter->execute();
 
         $this->recordLog($target, $result);
+        $this->failures->record($target, $result, 'scheduled');
         $this->applyStateChange($target, $result);
 
         return $result;
@@ -100,8 +102,8 @@ class ProbeExecutionService
                     'started_at' => now(),
                 ]);
 
-                ProcessStateChangeAlertJob::dispatch($target->id, 'DOWN', $incident->id)
-                    ->onQueue('alerts');
+                // Inline: no queue worker consumes the alerts queue any more.
+                ProcessStateChangeAlertJob::dispatchSync($target->id, 'DOWN', $incident->id);
             } else {
                 $target->update(['last_checked_at' => now()]);
             }
@@ -121,8 +123,7 @@ class ProbeExecutionService
         // Recovery: previous was DOWN and now UP
         if ($previous === 'DOWN' && $result->isUp()) {
             $this->resolveOpenIncidents($target);
-            ProcessStateChangeAlertJob::dispatch($target->id, 'RECOVERED')
-                ->onQueue('alerts');
+            ProcessStateChangeAlertJob::dispatchSync($target->id, 'RECOVERED');
         }
     }
 

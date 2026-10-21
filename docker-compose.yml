@@ -1,5 +1,6 @@
 services:
   # Nginx + Laravel app (FPM) — exposed on :8080
+  # NET_RAW required for ICMP ping, which now runs inside FPM.
   monitoring-web:
     build:
       context: .
@@ -8,53 +9,39 @@ services:
     restart: unless-stopped
     ports:
       - "8080:80"
-    volumes:
-      - report_storage:/var/www/html/storage/app/reports
-    depends_on:
-      - monitoring-postgres
-      - monitoring-redis
-
-  # Master Scheduler (singleton)
-  monitoring-scheduler:
-    build:
-      context: .
-      dockerfile: docker/app/Dockerfile
-    container_name: monitoring-scheduler
-    restart: unless-stopped
-    command: ["php", "artisan", "schedule:work"]
-    depends_on:
-      - monitoring-postgres
-      - monitoring-redis
-
-  # Probe + alert workers (replicas: 3). NET_RAW required for ICMP ping.
-  monitoring-worker-probes:
-    build:
-      context: .
-      dockerfile: docker/app/Dockerfile
-    restart: unless-stopped
-    command: ["php", "artisan", "queue:work", "redis", "--queue=alerts,probes", "--sleep=1", "--tries=1", "--timeout=15"]
-    deploy:
-      replicas: 3
     cap_add:
       - NET_RAW
-    depends_on:
-      - monitoring-postgres
-      - monitoring-redis
-
-  # Report worker — PDF/Excel generation + email dispatch
-  monitoring-worker-reports:
-    build:
-      context: .
-      dockerfile: docker/app/Dockerfile
-    container_name: monitoring-worker-reports
-    restart: unless-stopped
-    command: ["php", "artisan", "queue:work", "redis", "--queue=reports", "--sleep=3", "--tries=3", "--backoff=60,300,900", "--timeout=120"]
     volumes:
       - report_storage:/var/www/html/storage/app/reports
     depends_on:
       - monitoring-postgres
       - monitoring-redis
       - monitoring-gotenberg
+
+  # Go runner — the one process that owns all periodic work: probe scheduling,
+  # report dispatch, rollup and partition prune. Probes still execute in PHP
+  # through the internal endpoints of monitoring-web.
+  monitoring-runner:
+    build:
+      context: .
+      dockerfile: docker/runner/Dockerfile
+    container_name: monitoring-runner
+    restart: unless-stopped
+    environment:
+      OPSLIRA_BASE_URL: http://monitoring-web
+      OPSLIRA_RUNNER_TOKEN: ${OPSLIRA_RUNNER_TOKEN:-}
+      PROBE_CONCURRENCY: "8"
+      RUNNER_TICK_SECONDS: "15"
+      RUNNER_TIMEZONE: Asia/Jakarta
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/healthz >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - monitoring-postgres
+      - monitoring-redis
+      - monitoring-web
 
   # Gotenberg — headless Chromium HTML→PDF
   monitoring-gotenberg:

@@ -29,6 +29,43 @@ class DashboardController
             'incidents' => $this->activeIncidents(),
             'globalSla' => $this->globalSla(),
             'slaWindowDays' => 30,
+            'slaTrend' => $this->slaTrend(),
+            'targetDailySla' => $this->targetDailySla(),
+            'slaDate' => $this->latestSummaryDate(),
+        ]);
+    }
+
+    /**
+     * Alerts index: filterable incident list (open / resolved / all).
+     */
+    public function alerts(Request $request): Response
+    {
+        $filter = $request->query('filter', 'open');
+        if (! in_array($filter, ['open', 'resolved', 'all'], true)) {
+            $filter = 'open';
+        }
+
+        $query = Incident::with('target:id,name')->orderByDesc('started_at')->limit(100);
+        if ($filter === 'open') {
+            $query->open();
+        } elseif ($filter === 'resolved') {
+            $query->where('status', 'RESOLVED');
+        }
+
+        $incidents = $query->get()->map(fn ($i) => [
+            'id' => $i->id,
+            'target_id' => $i->target_id,
+            'target_name' => $i->target?->name,
+            'severity' => $i->severity,
+            'status' => $i->status,
+            'root_cause_message' => $i->root_cause_message,
+            'started_at' => $i->started_at?->toIso8601String(),
+            'resolved_at' => $i->resolved_at?->toIso8601String(),
+        ])->all();
+
+        return Inertia::render('Dashboard/AlertsIndex', [
+            'incidents' => $incidents,
+            'filter' => $filter,
         ]);
     }
 
@@ -43,6 +80,7 @@ class DashboardController
 
         return Inertia::render('Dashboard/NetworkDashboard', [
             'targets' => $this->decorateTargets($targets),
+            'internetTargets' => $this->decorateTargets($targets->where('target_type', 'INTERNET')->values()),
             'trafficSummary' => $this->trafficSummary($targets),
         ]);
     }
@@ -123,6 +161,7 @@ class DashboardController
             'maintenance' => $counts->get('MAINTENANCE', 0),
         ];
     }
+
 
     /**
      * @param  \Illuminate\Support\Collection<int, MonitoringTarget>  $targets
@@ -207,6 +246,83 @@ class DashboardController
             ->avg('uptime_percentage');
 
         return $avg === null ? null : round((float) $avg, 2);
+    }
+
+    /**
+     * Daily SLA rows for the NOC trend chart, one entry per rollup day for the
+     * last 30 days, oldest first. The summary table holds one row per target per
+     * day, so uptime and latency are averaged across the targets that reported
+     * that day. A day with no rollup row is absent instead of padded, and a day
+     * without an incident gets a real 0 (R-17, R-38).
+     *
+     * @return array<int, array{date: string, uptime: float|null, avg_latency: float|null, incidents: int}>
+     */
+    private function slaTrend(): array
+    {
+        $rows = DB::table('monitoring_daily_summaries')
+            ->where('summary_date', '>=', now()->subDays(30))
+            ->groupBy('summary_date')
+            ->orderBy('summary_date')
+            ->selectRaw('summary_date, AVG(uptime_percentage) AS uptime, AVG(avg_response_time_ms) AS avg_latency')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return [];
+        }
+
+        $incidents = DB::table('incidents')
+            ->where('started_at', '>=', now()->subDays(30))
+            ->groupBy('day')
+            ->selectRaw("to_char(started_at, 'YYYY-MM-DD') AS day, COUNT(*) AS total")
+            ->pluck('total', 'day');
+
+        return $rows->map(fn ($row) => [
+            'date' => (string) $row->summary_date,
+            'uptime' => $row->uptime === null ? null : round((float) $row->uptime, 2),
+            'avg_latency' => $row->avg_latency === null ? null : round((float) $row->avg_latency, 1),
+            'incidents' => (int) ($incidents[(string) $row->summary_date] ?? 0),
+        ])->all();
+    }
+
+    /**
+     * Latest rollup date, or null when no daily rollup exists yet.
+     */
+    private function latestSummaryDate(): ?string
+    {
+        $max = DB::table('monitoring_daily_summaries')->max('summary_date');
+
+        return $max === null ? null : (string) $max;
+    }
+
+    /**
+     * Per-target SLA rows for the latest rollup day, worst uptime first.
+     *
+     * @return array<int, array{target_id: string, name: string, current_status: string, uptime: float, total_checks: int, failed_checks: int}>
+     */
+    private function targetDailySla(): array
+    {
+        $latest = $this->latestSummaryDate();
+
+        if ($latest === null) {
+            return [];
+        }
+
+        return DB::table('monitoring_daily_summaries as s')
+            ->join('monitoring_targets as t', 't.id', '=', 's.target_id')
+            ->where('s.summary_date', $latest)
+            ->where('t.is_active', true)
+            ->orderBy('s.uptime_percentage')
+            ->select('s.target_id', 't.name', 't.current_status', 's.uptime_percentage as uptime', 's.total_checks', 's.failed_checks')
+            ->get()
+            ->map(fn ($row) => [
+                'target_id' => $row->target_id,
+                'name' => $row->name,
+                'current_status' => $row->current_status,
+                'uptime' => round((float) $row->uptime, 2),
+                'total_checks' => (int) $row->total_checks,
+                'failed_checks' => (int) $row->failed_checks,
+            ])
+            ->all();
     }
 
     /**

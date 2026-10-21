@@ -1,34 +1,20 @@
 <?php
 
-use Illuminate\Support\Facades\Schedule;
-
 /*
 |--------------------------------------------------------------------------
 | Scheduled Commands (Opslira)
 |--------------------------------------------------------------------------
-| Master Scheduler: docs/gemini/dokumen_arsitektur_aplikasi_web.md:227-230
+|
+| There are no Schedule:: entries here on purpose. The Go runner (go/) owns
+| every periodic trigger: it claims due targets, runs probes through the PHP
+| adapters, dispatches due reports, and calls the rollup and prune commands
+| through the internal endpoints. Leaving schedules here would double every
+| probe and report.
+|
+| All four commands stay callable by hand:
+|   php artisan monitoring:dispatch-probes
+|   php artisan monitoring:rollup
+|   php artisan monitoring:dispatch-reports
+|   php artisan monitoring:prune-partitions
+|
 */
-
-// Probe dispatch: every minute (targets due for check)
-Schedule::command('monitoring:dispatch-probes')
-    ->everyMinute()
-    ->withoutOverlapping()
-    ->runInBackground();
-
-// Midnight rollup: aggregate yesterday's logs into daily summaries (00:05 WIB)
-Schedule::command('monitoring:rollup')
-    ->dailyAt('00:05')
-    ->timezone('Asia/Jakarta')
-    ->withoutOverlapping();
-
-// Scheduled report dispatch: every minute (schedules due for run)
-Schedule::command('monitoring:dispatch-reports')
-    ->everyMinute()
-    ->withoutOverlapping()
-    ->runInBackground();
-
-// Partition maintenance: prune > 90 days + create next 2 months (02:00 WIB)
-Schedule::command('monitoring:prune-partitions')
-    ->dailyAt('02:00')
-    ->timezone('Asia/Jakarta')
-    ->withoutOverlapping();

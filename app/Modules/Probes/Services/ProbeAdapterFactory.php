@@ -20,6 +20,7 @@ class ProbeAdapterFactory
     /** @var array<string, class-string<ProbeAdapterInterface>> */
     private array $map = [
         'ICMP_SNMP' => NetworkSnmpProbeAdapter::class,
+        'ICMP_PING' => NetworkSnmpProbeAdapter::class,
         'HTTP_HEALTH' => HttpHealthProbeAdapter::class,
         'WHOIS_SSL' => DomainSslProbeAdapter::class,
         'DB_NATIVE_PING' => DatabasePingProbeAdapter::class,

@@ -1,8 +1,14 @@
 <?php
 
+use App\Modules\Probes\Adapters\MailServerProbeAdapter;
+use App\Modules\Probes\Adapters\NetworkSnmpProbeAdapter;
 use App\Modules\Probes\Contracts\ProbeResult;
 use App\Modules\Probes\Services\ProbeAdapterFactory;
+use App\Modules\Probes\Services\ProbeFailureLogger;
 use App\Modules\Reporting\Services\SlaCalculatorService;
+use App\Modules\Targets\Models\MonitoringTarget;
+use Illuminate\Support\Facades\Log;
+use Spatie\Ping\PingResult;
 
 it('returns the correct adapter for every supported protocol', function () {
     $factory = new ProbeAdapterFactory();
@@ -26,4 +32,276 @@ it('classifies probe result factories correctly', function () {
 
 it('exposes a concrete SLA calculator service', function () {
     expect(app(SlaCalculatorService::class))->toBeInstanceOf(SlaCalculatorService::class);
+});
+
+it('builds snmpget arguments for v2c community', function () {
+    $adapter = (new NetworkSnmpProbeAdapter())
+        ->configure(['enable_snmp' => true, 'host' => '10.0.0.1'], ['community' => 'xyz']);
+
+    expect($adapter->snmpCommandArguments('10.0.0.1'))->toBe([
+        'snmpget', '-v', '2c', '-c', 'xyz',
+        '-t', '5', '10.0.0.1', '1.3.6.1.2.1.1.3.0',
+    ]);
+});
+
+it('builds snmpget arguments for v3 authPriv', function () {
+    $adapter = (new NetworkSnmpProbeAdapter())
+        ->configure(['enable_snmp' => true, 'host' => '10.0.0.1'], [
+            'username' => 'monuser',
+            'auth_protocol' => 'SHA',
+            'auth_password' => 'auth-secret',
+            'priv_protocol' => 'AES',
+            'priv_password' => 'priv-secret',
+        ]);
+
+    expect($adapter->snmpCommandArguments('10.0.0.1'))->toBe([
+        'snmpget', '-v', '3', '-u', 'monuser', '-l', 'authPriv',
+        '-a', 'SHA', '-A', 'auth-secret',
+        '-x', 'AES', '-X', 'priv-secret',
+        '-t', '5', '10.0.0.1', '1.3.6.1.2.1.1.3.0',
+    ]);
+});
+
+it('returns no snmpget arguments when no credentials are configured', function () {
+    $adapter = (new NetworkSnmpProbeAdapter())
+        ->configure(['enable_snmp' => true, 'host' => '10.0.0.1'], []);
+
+    expect($adapter->snmpCommandArguments('10.0.0.1'))->toBe([]);
+});
+
+it('parses SMTP reply codes from reply lines', function () {
+    $adapter = new MailServerProbeAdapter();
+
+    expect($adapter->smtpReplyCode('220 mail.kantor.co.id ESMTP ready'))->toBe(220);
+    expect($adapter->smtpReplyCode('235 2.7.0 Authentication successful'))->toBe(235);
+    expect($adapter->smtpReplyCode('334 VXNlcm5hbWU6'))->toBe(334);
+    expect($adapter->smtpReplyCode('535 5.7.8 Authentication credentials invalid'))->toBe(535);
+});
+
+it('detects OK and non-OK tagged IMAP replies', function () {
+    $adapter = new MailServerProbeAdapter();
+
+    expect($adapter->imapReplyIsOk('a001 OK LOGIN completed'))->toBeTrue();
+    expect($adapter->imapReplyIsOk('a001 NO [AUTHENTICATIONFAILED] authentication failed'))->toBeFalse();
+    expect($adapter->imapReplyIsOk('a002 OK LOGOUT completed', 'a002'))->toBeTrue();
+});
+
+it('mailServicePort defaults to smtp on 587', function () {
+    $adapter = (new MailServerProbeAdapter())->configure(['host' => 'm']);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 587]);
+});
+
+it('mailServicePort prefers the shared port column with imap mode', function () {
+    $adapter = (new MailServerProbeAdapter())
+        ->configure(['host' => 'm', 'mail_check_mode' => 'imap', 'port' => 1993]);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'imap', 'port' => 1993]);
+});
+
+it('mailServicePort falls back to legacy check_ports', function () {
+    $adapter = (new MailServerProbeAdapter())
+        ->configure(['host' => 'm', 'check_ports' => ['smtp' => 2525, 'imap' => 993]]);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 2525]);
+});
+
+it('mailServicePort falls back to legacy single-port keys', function () {
+    $adapter = (new MailServerProbeAdapter())
+        ->configure(['host' => 'm', 'mail_check_mode' => 'smtp', 'smtp_port' => 2526]);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 2526]);
+});
+
+it('mailServicePort forces an unknown mode back to smtp', function () {
+    $adapter = (new MailServerProbeAdapter())
+        ->configure(['host' => 'm', 'mail_check_mode' => 'pop3']);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 587]);
+});
+
+it('greets with the target host over EHLO', function () {
+    $pair = @stream_socket_pair(STREAM_PF_INET, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+    if ($pair === false) {
+        $this->markTestSkipped('stream_socket_pair unavailable on this runner');
+    }
+
+    [$server, $client] = $pair;
+    fwrite($server, "250 mail.example.test greets mail.example.test\r\n");
+
+    $adapter = new MailServerProbeAdapter();
+    $reply = $adapter->smtpEhloReply($client, 'mail.example.test');
+
+    expect($adapter->smtpReplyCode((string) $reply))->toBe(250);
+    expect(trim((string) fgets($server)))->toBe('EHLO mail.example.test');
+    stream_set_blocking($server, false);
+    expect(fgets($server))->toBeFalse();
+    fclose($server);
+    fclose($client);
+});
+
+it('falls back to HELO when EHLO is rejected', function () {
+    $pair = @stream_socket_pair(STREAM_PF_INET, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+    if ($pair === false) {
+        $this->markTestSkipped('stream_socket_pair unavailable on this runner');
+    }
+
+    [$server, $client] = $pair;
+    fwrite($server, "550 rejected\r\n250 mail.example.test HELO\r\n");
+
+    $adapter = new MailServerProbeAdapter();
+    $reply = $adapter->smtpEhloReply($client, 'mail.example.test');
+
+    expect($reply)->not->toBeNull();
+    expect($adapter->smtpReplyCode($reply))->toBe(250);
+    expect(trim((string) fgets($server)))->toBe('EHLO mail.example.test');
+    expect(trim((string) fgets($server)))->toBe('HELO mail.example.test');
+    fclose($server);
+    fclose($client);
+});
+
+it('maps a successful spatie ping result to stats', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+    $result = PingResult::fromArray([
+        'success' => true,
+        'error' => null,
+        'host' => '10.0.0.1',
+        'packet_loss_percentage' => 0,
+        'packets_transmitted' => 2,
+        'packets_received' => 2,
+        'timings' => [
+            'minimum_time_in_ms' => 1.1,
+            'maximum_time_in_ms' => 3.9,
+            'average_time_in_ms' => 2.5,
+            'standard_deviation_time_in_ms' => 0.8,
+        ],
+    ]);
+
+    expect($adapter->pingResultToStats($result))->toBe([
+        'success' => true,
+        'avg_ms' => 2.5,
+        'packet_loss' => 0.0,
+        'jitter' => 0.8,
+        'error' => null,
+        'raw' => null,
+    ]);
+});
+
+it('maps a failed spatie ping result to stats', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+    $result = PingResult::fromArray([
+        'success' => false,
+        'error' => 'timeout',
+        'host' => '10.0.0.1',
+        'packet_loss_percentage' => 100,
+    ]);
+
+    expect($adapter->pingResultToStats($result))->toBe([
+        'success' => false,
+        'avg_ms' => null,
+        'packet_loss' => 100.0,
+        'jitter' => null,
+        'error' => 'timeout',
+        'raw' => null,
+    ]);
+});
+
+it('keeps ping stdout in the failure stats', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+    $result = PingResult::fromArray([
+        'success' => false,
+        'error' => 'unknownError',
+        'host' => 'bad-host.invalid',
+        'packet_loss_percentage' => 100,
+        'raw_output' => "Ping request could not find host bad-host.invalid.\r\n",
+    ]);
+
+    expect($adapter->pingResultToStats($result))->toBe([
+        'success' => false,
+        'avg_ms' => null,
+        'packet_loss' => 100.0,
+        'jitter' => null,
+        'error' => 'unknownError',
+        'raw' => 'Ping request could not find host bad-host.invalid.',
+    ]);
+});
+
+it('builds ping arguments for the current OS', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+    $arguments = $adapter->pingCommandArguments('1.1.1.1', 2);
+
+    if (PHP_OS_FAMILY === 'Windows') {
+        // ping.exe takes -n (count) and -w (timeout in ms); -c/-W are Linux flags
+        expect($arguments)->toBe(['ping', '-n', '2', '-w', '5000', '1.1.1.1']);
+    } else {
+        expect($arguments)->toBeNull();
+    }
+});
+
+it('parses windows ping statistics', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+    $output = implode("\n", [
+        'Pinging 10.10.0.5 with 32 bytes of data:',
+        '',
+        'Reply from 10.10.0.5: bytes=32 time=1ms TTL=128',
+        'Reply from 10.10.0.5: bytes=32 time=1ms TTL=128',
+        'Request timed out.',
+        'Reply from 10.10.0.5: bytes=32 time=2ms TTL=128',
+        '',
+        'Ping statistics for 10.10.0.5:',
+        '    Packets: Sent = 4, Received = 3, Lost = 1 (25% loss),',
+        'Approximate round trip times in milli-seconds:',
+        '    Minimum = 1ms, Maximum = 2ms, Average = 1ms',
+    ]);
+    $result = PingResult::fromArray([
+        'success' => true,
+        'error' => null,
+        'host' => '10.10.0.5',
+        'packet_loss_percentage' => 0,
+        'raw_output' => $output,
+    ]);
+
+    expect($adapter->windowsAverageTimeInMs($result))->toBe(1.0)
+        ->and($adapter->windowsPacketLossPercentage($result))->toBe(25.0);
+});
+
+it('returns null for statistics that are not in the windows format', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+    $result = PingResult::fromArray([
+        'success' => false,
+        'error' => 'unknownError',
+        'host' => 'bad-host.invalid',
+        'raw_output' => 'Ping request could not find host bad-host.invalid.',
+    ]);
+
+    expect($adapter->windowsAverageTimeInMs($result))->toBeNull()
+        ->and($adapter->windowsPacketLossPercentage($result))->toBeNull()
+        ->and($adapter->pingFailureDetail($result))->toBe('Ping request could not find host bad-host.invalid.');
+});
+
+it('classifies a windows ping failure from its own wording', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+
+    $notFound = PingResult::fromArray([
+        'success' => false,
+        'error' => 'unknownError',
+        'host' => 'bad-host.invalid',
+        'raw_output' => "Ping request could not find host bad-host.invalid.",
+    ]);
+    $timedOut = PingResult::fromArray([
+        'success' => false,
+        'error' => 'unknownError',
+        'host' => '10.255.255.1',
+        'raw_output' => "Request timed out.",
+    ]);
+    $linuxStyle = PingResult::fromArray([
+        'success' => false,
+        'error' => 'unknownError',
+        'host' => '10.0.0.1',
+        'raw_output' => 'some unrelated failure text',
+    ]);
+
+    expect($adapter->windowsPingError($notFound))->toBe('host not found')
+        ->and($adapter->windowsPingError($timedOut))->toBe('request timed out')
+        ->and($adapter->windowsPingError($linuxStyle))->toBeNull();
 });

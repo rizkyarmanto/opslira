@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * Dynamic Zod schemas per protocol. Mirrors the 7 config_payload shapes.
+ * Dynamic Zod schemas per protocol. Mirrors the config_payload shapes.
  * docs/gemini/erd_skema_database_postgresql.md:162-170
  */
 
@@ -9,7 +9,6 @@ export const networkSchema = z.object({
     sub_type: z.enum(['ROUTER', 'SWITCH', 'AP', 'SERVER']),
     icmp_count: z.coerce.number().int().min(1).max(10).default(4),
     enable_snmp: z.boolean().default(false),
-    snmp_version: z.enum(['2c', '3']).optional(),
 });
 
 export const webAppSchema = z.object({
@@ -32,18 +31,27 @@ export const databaseSchema = z.object({
     database_name: z.string().min(1),
     query: z.string().default('SELECT 1'),
     collect_connection_stats: z.boolean().default(true),
+    check_replication_lag: z.boolean().default(false),
 });
 
 export const mailSchema = z.object({
     check_ports: z.record(z.coerce.number()).default({ smtp: 587, imap: 993 }),
+    mail_check_mode: z.enum(['smtp', 'imap']).default('smtp'),
     check_dnsbl: z.boolean().default(true),
-    dnsbl_providers: z.array(z.string()).default(['zen.spamhaus.org', 'blaspcop.net']),
+    dnsbl_providers: z.array(z.string()).default(['zen.spamcop.net']),
 });
 
 export const s3Schema = z.object({
+    s3_provider: z.enum(['aws', 'compatible']).default('aws'),
     region: z.string().min(1),
     bucket_name: z.string().min(1),
     use_path_style_endpoint: z.boolean().default(true),
+    // Legacy rows from the old form; the S3 URL field is the endpoint now.
+    endpoint: z.string().optional(),
+});
+
+export const internetSchema = z.object({
+    icmp_count: z.coerce.number().int().min(1).max(10).default(4),
 });
 
 export const beszelSchema = z.object({
@@ -62,6 +70,7 @@ export const targetFormSchema = z
         dashboard_group: z.enum(['NETWORK', 'APP_DOMAIN_DB', 'MAIL_S3_BESZEL']),
         target_type: z.enum([
             'NETWORK_DEVICE',
+            'INTERNET',
             'WEB_APP',
             'DOMAIN',
             'DATABASE',
@@ -71,9 +80,15 @@ export const targetFormSchema = z
         ]),
         environment: z.enum(['PRODUCTION', 'STAGING', 'DEVELOPMENT', 'INTERNAL']),
         host_or_endpoint: z.string().min(1, 'Host/endpoint is required').max(255),
-        port: z.coerce.number().int().min(1).max(65535).nullable().optional(),
+        // The input feeds "" when untouched; coerce that to null so the optional
+        // port does not turn into 0 and fail min(1) on every clean save.
+        port: z.preprocess(
+            (value) => (value === '' || value === undefined ? null : value),
+            z.coerce.number().int().min(1).max(65535).nullable(),
+        ),
         protocol_type: z.enum([
             'ICMP_SNMP',
+            'ICMP_PING',
             'HTTP_HEALTH',
             'WHOIS_SSL',
             'DB_NATIVE_PING',
@@ -86,6 +101,22 @@ export const targetFormSchema = z
         retry_threshold: z.coerce.number().int().min(1).max(10).default(3),
         degraded_threshold_ms: z.coerce.number().int().min(1).default(1000),
         config_payload: z.record(z.unknown()).default({}),
+        credentials: z
+            .object({
+                auth_type: z.enum([
+                    'NONE',
+                    'DB_AUTH',
+                    'SNMP_V2C',
+                    'SNMP_V3',
+                    'S3_KEY',
+                    'BESZEL',
+                    'HTTP_BASIC',
+                    'HTTP_BEARER',
+                    'MAIL_AUTH',
+                ]),
+                payload: z.record(z.unknown()).default({}),
+            })
+            .default({ auth_type: 'NONE', payload: {} }),
     })
     .passthrough();
 
@@ -94,6 +125,7 @@ export type TargetFormValues = z.infer<typeof targetFormSchema>;
 /** Map target_type -> dynamic sub-schema (used to build config_payload). */
 export const configSchemaByType = {
     NETWORK_DEVICE: networkSchema,
+    INTERNET: internetSchema,
     WEB_APP: webAppSchema,
     DOMAIN: domainSchema,
     DATABASE: databaseSchema,
@@ -104,6 +136,7 @@ export const configSchemaByType = {
 
 export const protocolByTargetType = {
     NETWORK_DEVICE: 'ICMP_SNMP',
+    INTERNET: 'ICMP_PING',
     WEB_APP: 'HTTP_HEALTH',
     DOMAIN: 'WHOIS_SSL',
     DATABASE: 'DB_NATIVE_PING',
@@ -114,6 +147,7 @@ export const protocolByTargetType = {
 
 export const dashboardGroupByTargetType = {
     NETWORK_DEVICE: 'NETWORK',
+    INTERNET: 'NETWORK',
     WEB_APP: 'APP_DOMAIN_DB',
     DOMAIN: 'APP_DOMAIN_DB',
     DATABASE: 'APP_DOMAIN_DB',

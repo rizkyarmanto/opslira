@@ -88,9 +88,7 @@ class AlertNotificationService
      */
     private function recipients(): array
     {
-        $configured = env('ALERT_RECIPIENTS');
-
-        return $configured ? array_filter(array_map('trim', explode(',', $configured))) : [];
+        return config('monitoring.alert_recipients', []);
     }
 
     private function sendTelegram(string $body): void

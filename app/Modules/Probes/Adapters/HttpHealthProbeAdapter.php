@@ -17,7 +17,9 @@ class HttpHealthProbeAdapter extends BaseProbeAdapter
 
     public function execute(): ProbeResult
     {
-        $url = $this->config('url');
+        // WEB_APP targets carry the full URL in host_or_endpoint (injected as
+        // config 'host'); config_payload 'url' stays for hand-built payloads.
+        $url = $this->config('url') ?? $this->config('host');
         if (! $url) {
             return ProbeResult::down('Missing url in config_payload');
         }
@@ -36,6 +38,11 @@ class HttpHealthProbeAdapter extends BaseProbeAdapter
 
             if ($bearer) {
                 $request = $request->withToken($bearer);
+            } elseif ($this->credential('username')) {
+                $request = $request->withBasicAuth(
+                    (string) $this->credential('username'),
+                    (string) $this->credential('password', ''),
+                );
             }
 
             $response = $request->send($method, $url);

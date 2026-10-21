@@ -58,7 +58,7 @@ erDiagram
     TARGET_CREDENTIALS {
         uuid id PK
         uuid target_id FK, UK
-        varchar auth_type "NONE, DB_AUTH, SNMP_V2C, SNMP_V3, S3_KEY, BESZEL_TOKEN, HTTP_BEARER"
+        varchar auth_type "NONE, DB_AUTH, SNMP_V2C, SNMP_V3, S3_KEY, BESZEL, HTTP_BASIC, HTTP_BEARER, MAIL_AUTH"
         text encrypted_payload "AES-256-GCM Ciphertext"
         varchar encryption_iv "Initialization Vector"
         varchar encryption_tag "Authentication Tag"
@@ -256,7 +256,7 @@ CREATE TABLE target_credentials (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     target_id UUID NOT NULL UNIQUE REFERENCES monitoring_targets(id) ON DELETE CASCADE,
     auth_type VARCHAR(30) NOT NULL CHECK (
-        auth_type IN ('NONE', 'DB_AUTH', 'SNMP_V2C', 'SNMP_V3', 'S3_KEY', 'BESZEL_TOKEN', 'HTTP_BEARER')
+        auth_type IN ('NONE', 'DB_AUTH', 'SNMP_V2C', 'SNMP_V3', 'S3_KEY', 'BESZEL', 'HTTP_BASIC', 'HTTP_BEARER', 'MAIL_AUTH')
     ),
     encrypted_payload TEXT NOT NULL,
     encryption_iv VARCHAR(64) NOT NULL,

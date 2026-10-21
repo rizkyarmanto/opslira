@@ -3,7 +3,9 @@ import { Head, router, usePage } from '@inertiajs/react';
 import { CheckCircle2, MinusCircle, Pencil, Plus, RefreshCw } from 'lucide-react';
 import AppLayout from '@/components/shared/AppLayout';
 import Button from '@/components/shared/Button';
+import ConfirmModal from '@/components/shared/ConfirmModal';
 import ToggleSwitch from '@/components/shared/ToggleSwitch';
+import ReloadIndicator from '@/components/beautiful-ui/ReloadIndicator';
 import UserFormDrawer from '@/pages/Users/UserFormDrawer';
 import { api, apiErrorMessage } from '@/lib/api';
 import { roleLabels } from '@/lib/schemas/user';
@@ -28,8 +30,16 @@ export default function UserIndex({ users, canManageUsers }: Props) {
     const [editing, setEditing] = useState<ManagedUser | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [reloading, setReloading] = useState(false);
+    const [confirmUser, setConfirmUser] = useState<ManagedUser | null>(null);
+    const [confirmAction, setConfirmAction] = useState<'disable' | 'toggle'>('disable');
 
-    const reload = () => router.reload({ only: ['users'] });
+    const reload = () =>
+        router.reload({
+            only: ['users'],
+            onStart: () => setReloading(true),
+            onFinish: () => setReloading(false),
+        });
 
     const openCreate = () => {
         setEditing(null);
@@ -41,7 +51,12 @@ export default function UserIndex({ users, canManageUsers }: Props) {
         setDrawerOpen(true);
     };
 
-    const setActive = async (user: ManagedUser, next: boolean) => {
+    const openConfirm = (user: ManagedUser, action: 'disable' | 'toggle') => {
+        setConfirmAction(action);
+        setConfirmUser(user);
+    };
+
+    const runSetActive = async (user: ManagedUser, next: boolean) => {
         setBusyId(user.id);
         setError(null);
         try {
@@ -51,6 +66,7 @@ export default function UserIndex({ users, canManageUsers }: Props) {
                 role: user.role,
                 is_active: next,
             });
+            setConfirmUser(null);
             reload();
         } catch (err) {
             setError(apiErrorMessage(err, 'Could not update this user.'));
@@ -59,12 +75,20 @@ export default function UserIndex({ users, canManageUsers }: Props) {
         }
     };
 
-    const disableUser = async (user: ManagedUser) => {
-        if (!confirm(`Disable user "${user.name}"? They will be signed out and cannot sign in again.`)) return;
+    const setActive = (user: ManagedUser, next: boolean) => {
+        if (next) {
+            void runSetActive(user, true);
+        } else {
+            openConfirm(user, 'toggle');
+        }
+    };
+
+    const runDisable = async (user: ManagedUser) => {
         setBusyId(user.id);
         setError(null);
         try {
             await api.delete(`/users/${user.id}`);
+            setConfirmUser(null);
             reload();
         } catch (err) {
             setError(apiErrorMessage(err, 'Could not disable this user.'));
@@ -87,7 +111,7 @@ export default function UserIndex({ users, canManageUsers }: Props) {
                     onClick={reload}
                     aria-label="Reload user list"
                 >
-                    <RefreshCw size={15} aria-hidden />
+                    {reloading ? <ReloadIndicator label="Reloading" /> : <RefreshCw size={15} aria-hidden />}
                     Reload
                 </Button>
 
@@ -115,7 +139,16 @@ export default function UserIndex({ users, canManageUsers }: Props) {
                     </Button>
                 </div>
             ) : (
-                <div className="overflow-x-auto rounded-md border border-noc-border">
+                <>
+                    {reloading && (
+                        <div className="mb-3">
+                            <ReloadIndicator label="Refreshing user list" />
+                        </div>
+                    )}
+                    <div
+                        className={`overflow-x-auto rounded-md border border-noc-border${reloading ? ' pointer-events-none opacity-60' : ''}`}
+                        aria-busy={reloading}
+                    >
                     <table className="w-full min-w-[720px] text-left text-sm">
                         <thead className="bg-white/[0.03]">
                             <tr>
@@ -177,7 +210,7 @@ export default function UserIndex({ users, canManageUsers }: Props) {
                                                             variant="ghost"
                                                             loading={busyId === user.id}
                                                             disabled={!canManageUsers}
-                                                            onClick={() => disableUser(user)}
+                                                            onClick={() => openConfirm(user, 'disable')}
                                                             className="!border-status-down/30 !px-3 !py-1.5 !text-xs !text-status-down hover:!bg-status-down/10"
                                                         >
                                                             Disable
@@ -191,7 +224,8 @@ export default function UserIndex({ users, canManageUsers }: Props) {
                             })}
                         </tbody>
                     </table>
-                </div>
+                    </div>
+                </>
             )}
 
             <UserFormDrawer
@@ -199,6 +233,28 @@ export default function UserIndex({ users, canManageUsers }: Props) {
                 onClose={() => setDrawerOpen(false)}
                 onSaved={reload}
                 user={editing}
+            />
+
+            <ConfirmModal
+                tone="danger"
+                open={confirmUser !== null}
+                title={`Disable user "${confirmUser?.name ?? ''}"?`}
+                message={
+                    confirmAction === 'toggle'
+                        ? 'Checks stop and the row leaves the active list.'
+                        : 'They will be signed out and cannot sign in again.'
+                }
+                confirmLabel="Disable"
+                pending={busyId === confirmUser?.id}
+                onConfirm={() => {
+                    if (!confirmUser) return;
+                    if (confirmAction === 'toggle') {
+                        void runSetActive(confirmUser, false);
+                    } else {
+                        void runDisable(confirmUser);
+                    }
+                }}
+                onClose={() => setConfirmUser(null)}
             />
         </AppLayout>
     );

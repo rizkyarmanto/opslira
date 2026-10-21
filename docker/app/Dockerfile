@@ -1,4 +1,4 @@
-FROM php:8.3-fpm-alpine
+FROM php:8.4-fpm-alpine
 
 # System dependencies + probe binaries (iputils-ping, net-snmp, whois, openssl)
 RUN apk add --no-cache \
@@ -61,6 +61,7 @@ RUN chown -R www-data:www-data storage bootstrap/cache \
 COPY docker/app/nginx.conf /etc/nginx/nginx.conf
 COPY docker/app/default.conf /etc/nginx/http.d/default.conf
 COPY docker/app/supervisord.conf /etc/supervisord.conf
+COPY docker/app/php-fpm.conf /usr/local/etc/php-fpm.d/zz-opslira.conf
 
 EXPOSE 80 9000
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]

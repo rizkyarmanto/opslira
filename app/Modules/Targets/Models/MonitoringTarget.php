@@ -12,6 +12,16 @@ class MonitoringTarget extends Model
 {
     use HasFactory, HasUuid;
 
+    /**
+     * The model lives in a nested namespace while its factory sits at the
+     * top of Database\Factories; without this Laravel looks for a factory in
+     * a mirrored subfolder and fails to resolve it.
+     */
+    protected static function newFactory(): \Database\Factories\MonitoringTargetFactory
+    {
+        return \Database\Factories\MonitoringTargetFactory::new();
+    }
+
     protected $table = 'monitoring_targets';
 
     protected $fillable = [

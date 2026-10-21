@@ -56,8 +56,17 @@ class DatabasePingProbeAdapter extends BaseProbeAdapter
                 'query_exec_ms' => $queryExec,
             ];
 
-            if ((bool) $this->config('collect_connection_stats', false)) {
+            // The form sends "true"/"false" as text; a plain (bool) cast would turn
+            // the string "false" on.
+            if (filter_var($this->config('collect_connection_stats', false), FILTER_VALIDATE_BOOLEAN)) {
                 $metrics = [...$metrics, ...$this->connectionStats($pdo, $driver)];
+            }
+
+            // The form sends "true"/"false" as text; a plain (bool) cast would
+            // turn the string "false" on.
+            $checkReplicationLag = filter_var($this->config('check_replication_lag', false), FILTER_VALIDATE_BOOLEAN);
+            if ($checkReplicationLag) {
+                $metrics = [...$metrics, ...$this->replicationLag($pdo, $driver)];
             }
 
             $pdo = null;
@@ -87,6 +96,42 @@ class DatabasePingProbeAdapter extends BaseProbeAdapter
             }
         } catch (\Throwable $e) {
             // Stats are best-effort
+        }
+
+        return [];
+    }
+
+    /**
+     * Best-effort replication lag in seconds. Metric only; a threshold-driven
+     * status change is not specified here so it stays out of classification.
+     *
+     * @return array<string, int>
+     */
+    private function replicationLag(PDO $pdo, string $driver): array
+    {
+        try {
+            if ($driver === 'pgsql') {
+                // Replay lag on a standby; returns 0 on a primary.
+                $lag = $pdo->query(
+                    'SELECT COALESCE(CAST(EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) AS int), 0)'
+                )->fetchColumn();
+
+                return ['replication_lag_seconds' => (int) $lag];
+            }
+
+            if (in_array($driver, ['mysql', 'mariadb'], true)) {
+                $row = $pdo->query('SHOW REPLICA STATUS')->fetch(\PDO::FETCH_ASSOC);
+                if (! $row) {
+                    $row = $pdo->query('SHOW SLAVE STATUS')->fetch(\PDO::FETCH_ASSOC);
+                }
+
+                $behind = $row['Seconds_Behind_Source'] ?? $row['Seconds_Behind_Slave'] ?? null;
+
+                return $behind === null ? [] : ['replication_lag_seconds' => (int) $behind];
+            }
+        } catch (\Throwable $e) {
+            // Lag is best-effort; a monitoring user without the right grant simply
+            // omits the metric.
         }
 
         return [];

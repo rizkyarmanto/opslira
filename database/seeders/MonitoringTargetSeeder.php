@@ -110,6 +110,20 @@ class MonitoringTargetSeeder extends Seeder
                     'warn_disk_pct' => 85,
                 ],
             ],
+            [
+                'name' => 'Internet DNS (8.8.8.8)',
+                'dashboard_group' => 'NETWORK',
+                'target_type' => 'INTERNET',
+                'environment' => 'PRODUCTION',
+                'host_or_endpoint' => '8.8.8.8',
+                'protocol_type' => 'ICMP_PING',
+                // icmp_only is written explicitly because the seeder bypasses the
+                // controller, and without it the target inherits the TCP fallback.
+                'config_payload' => [
+                    'icmp_count' => 4,
+                    'icmp_only' => true,
+                ],
+            ],
         ];
 
         foreach ($targets as $target) {

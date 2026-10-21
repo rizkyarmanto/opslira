@@ -6,6 +6,8 @@ use App\Modules\Reporting\Jobs\GenerateAndSendReportJob;
 use App\Modules\Reporting\Models\EmailDeliveryLog;
 use App\Modules\Reporting\Models\GeneratedReport;
 use App\Modules\Reporting\Models\ReportSchedule;
+use App\Modules\Reporting\Services\CronNextRunCalculator;
+use Cron\CronExpression;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -13,6 +15,10 @@ use Inertia\Response;
 
 class ReportController
 {
+    public function __construct(private readonly CronNextRunCalculator $calculator)
+    {
+    }
+
     public function schedules(): Response
     {
         return Inertia::render('Reports/ScheduleManager', [
@@ -33,7 +39,7 @@ class ReportController
         $data = $request->validate([
             'name' => ['required', 'string', 'max:150'],
             'period_type' => ['required', 'in:DAILY,WEEKLY,MONTHLY,CUSTOM_CRON'],
-            'cron_expression' => ['required', 'string', 'max:60'],
+            'cron_expression' => $this->cronRules(),
             'timezone' => ['string', 'max:50'],
             'recipients_to' => ['array'],
             'recipients_cc' => ['array'],
@@ -43,7 +49,10 @@ class ReportController
 
         $schedule = ReportSchedule::create([
             ...$data,
-            'next_run_at' => now()->addDay(),
+            'next_run_at' => $this->calculator->next(
+                (string) $data['cron_expression'],
+                $data['timezone'] ?? 'Asia/Jakarta',
+            ),
             'is_active' => true,
         ]);
 
@@ -52,19 +61,66 @@ class ReportController
 
     public function update(Request $request, ReportSchedule $schedule): JsonResponse
     {
+        // Partial payloads are normal here: the card toggle sends only is_active,
+        // so every rule is `sometimes` and a full edit still validates cleanly.
+        $request->validate([
+            'name' => ['sometimes', 'required', 'string', 'max:150'],
+            'period_type' => ['sometimes', 'in:DAILY,WEEKLY,MONTHLY,CUSTOM_CRON'],
+            'cron_expression' => ['sometimes', ...$this->cronRules()],
+            'timezone' => ['sometimes', 'string', 'max:50'],
+            'recipients_to' => ['sometimes', 'array'],
+            'recipients_cc' => ['sometimes', 'array'],
+            'send_only_on_issues' => ['sometimes', 'boolean'],
+            'report_formats' => ['sometimes', 'array'],
+            'is_active' => ['sometimes', 'boolean'],
+        ]);
+
+        $previousCron = $schedule->cron_expression;
+        $previousTimezone = $schedule->timezone;
+
         $schedule->update($request->only([
-            'name', 'cron_expression', 'timezone', 'recipients_to',
+            'name', 'period_type', 'cron_expression', 'timezone', 'recipients_to',
             'recipients_cc', 'send_only_on_issues', 'report_formats', 'is_active',
         ]));
+
+        // The next run only moves when the schedule itself moved. Changing a
+        // recipient list must not push the run time forward.
+        if ($schedule->cron_expression !== $previousCron || $schedule->timezone !== $previousTimezone) {
+            $schedule->update([
+                'next_run_at' => $this->calculator->next(
+                    (string) $schedule->cron_expression,
+                    $schedule->timezone ?: 'Asia/Jakarta',
+                ),
+            ]);
+        }
 
         return response()->json(['schedule' => $schedule->fresh()]);
     }
 
     public function destroy(ReportSchedule $schedule): JsonResponse
     {
-        $schedule->update(['is_active' => false]);
+        // Hard delete. generated_reports.schedule_id is nullOnDelete, so the
+        // report history survives with its schedule link cleared.
+        $schedule->delete();
 
         return response()->json(['ok' => true]);
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private function cronRules(): array
+    {
+        return [
+            'required',
+            'string',
+            'max:60',
+            function ($attribute, $value, $fail) {
+                if (! CronExpression::isValidExpression((string) $value)) {
+                    $fail('The cron expression is not valid. Use five fields, for example 0 8 * * *.');
+                }
+            },
+        ];
     }
 
     /**

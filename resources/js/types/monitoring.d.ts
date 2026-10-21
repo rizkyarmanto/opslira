@@ -4,6 +4,7 @@ export type DashboardGroup = 'NETWORK' | 'APP_DOMAIN_DB' | 'MAIL_S3_BESZEL';
 
 export type TargetType =
     | 'NETWORK_DEVICE'
+    | 'INTERNET'
     | 'WEB_APP'
     | 'DOMAIN'
     | 'DATABASE'
@@ -13,6 +14,7 @@ export type TargetType =
 
 export type ProtocolType =
     | 'ICMP_SNMP'
+    | 'ICMP_PING'
     | 'HTTP_HEALTH'
     | 'WHOIS_SSL'
     | 'DB_NATIVE_PING'

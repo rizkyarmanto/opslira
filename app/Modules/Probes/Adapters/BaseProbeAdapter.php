@@ -25,6 +25,18 @@ abstract class BaseProbeAdapter implements ProbeAdapterInterface
         return $this;
     }
 
+    /**
+     * Apply the timeout from a form payload. forTarget() covers saved targets;
+     * the pre-save test route has no target yet, so it must set the timeout
+     * explicitly instead of leaving the 5 s default.
+     */
+    public function withTimeoutSeconds(int $seconds): static
+    {
+        $this->timeoutSeconds = max(1, min(60, $seconds));
+
+        return $this;
+    }
+
     public function forTarget(MonitoringTarget $target): static
     {
         $this->timeoutSeconds = $target->timeout_seconds ?? 5;

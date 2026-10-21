@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "8cbb5845ad4d954acfa5d6ebb5e8de8b",
+    "content-hash": "59e417193d1706797bcdc0a0f810e0ca",
     "packages": [
         {
             "name": "aws/aws-crt-php",
@@ -3646,6 +3646,65 @@
                 "source": "https://github.com/ramsey/uuid/tree/4.9.4"
             },
             "time": "2026-09-16T11:39:30+00:00"
+        },
+        {
+            "name": "spatie/ping",
+            "version": "1.2.3",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/spatie/ping.git",
+                "reference": "c4b32b7b6202f40829a8821af59ecb94d18b245a"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/spatie/ping/zipball/c4b32b7b6202f40829a8821af59ecb94d18b245a",
+                "reference": "c4b32b7b6202f40829a8821af59ecb94d18b245a",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^8.4",
+                "symfony/process": "^7.0|^8.0"
+            },
+            "require-dev": {
+                "laravel/pint": "^1.0",
+                "pestphp/pest": "^5.3",
+                "spatie/pest-expectations": "^1.13",
+                "spatie/ray": "^1.28"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Spatie\\Ping\\": "src"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Freek Van der Herten",
+                    "email": "freek@spatie.be",
+                    "role": "Developer"
+                }
+            ],
+            "description": "Run an ICMP ping and get structured results",
+            "homepage": "https://github.com/spatie/ping",
+            "keywords": [
+                "ping",
+                "spatie"
+            ],
+            "support": {
+                "issues": "https://github.com/spatie/ping/issues",
+                "source": "https://github.com/spatie/ping/tree/1.2.3"
+            },
+            "funding": [
+                {
+                    "url": "https://github.com/spatie",
+                    "type": "github"
+                }
+            ],
+            "time": "2026-10-19T13:29:47+00:00"
         },
         {
             "name": "symfony/clock",

@@ -49,6 +49,10 @@ export default function MailS3BeszelDashboard({ targets }: Props) {
             >
                 {mail.map((target) => {
                     const m = (target.state?.summary_metrics ?? {}) as Record<string, unknown>;
+                    const cfg = (target.config_payload ?? {}) as Record<string, any>;
+                    const mode = cfg.mail_check_mode === 'imap' ? 'imap' : 'smtp';
+                    const legacyPorts = (cfg.check_ports ?? {}) as Record<string, number>;
+                    const mailPort = Number(target.port ?? legacyPorts[mode] ?? (mode === 'smtp' ? cfg.smtp_port : cfg.imap_port) ?? (mode === 'imap' ? 993 : 587));
                     const blacklisted = m.is_blacklisted === true;
                     const listedOn = (m.listed_on as string[]) ?? [];
                     const checked = m.dnsbl_checked === true || m.is_blacklisted !== undefined;
@@ -66,8 +70,11 @@ export default function MailS3BeszelDashboard({ targets }: Props) {
                             </div>
 
                             <div className="flex flex-wrap gap-2">
-                                <PortChip label="SMTP 587" up={m.smtp_587_up === true} checked={m.smtp_587_up !== undefined} />
-                                <PortChip label="IMAP 993" up={m.imap_993_up === true} checked={m.imap_993_up !== undefined} />
+                                <PortChip
+                                    label={`${mode === 'imap' ? 'IMAP' : 'SMTP'} ${mailPort}`}
+                                    up={m[`${mode}_${mailPort}_up`] === true}
+                                    checked={m[`${mode}_${mailPort}_up`] !== undefined}
+                                />
                             </div>
 
                             <div

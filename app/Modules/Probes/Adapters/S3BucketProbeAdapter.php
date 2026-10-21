@@ -38,13 +38,29 @@ class S3BucketProbeAdapter extends BaseProbeAdapter
             'credentials' => ['key' => $key, 'secret' => $secret],
         ];
 
-        if ((bool) $this->config('use_path_style_endpoint', false)) {
-            $options['use_path_style_endpoint'] = true;
+        $provider = (string) ($this->config('s3_provider') ?: 'aws');
+        $legacyEndpoint = trim((string) $this->config('endpoint', ''));
+        $host = rtrim(trim((string) $this->config('host', '')), '/');
+
+        if ($legacyEndpoint !== '') {
+            // Rows written by the old form keep working; the form no longer
+            // writes this key (the S3 URL field is the endpoint now).
+            $endpoint = $legacyEndpoint;
+        } elseif ($provider === 'compatible') {
+            if (! str_starts_with($host, 'http://') && ! str_starts_with($host, 'https://')) {
+                return ProbeResult::down('S3 compatible provider needs an S3 URL host starting with http:// or https://', ['bucket_accessible' => false]);
+            }
+            $endpoint = $host;
+        } else {
+            $endpoint = '';
+        }
+        if ($endpoint !== '') {
+            $options['endpoint'] = $endpoint;
         }
 
-        $endpoint = $this->config('endpoint');
-        if ($endpoint) {
-            $options['endpoint'] = $endpoint;
+        // Custom endpoints lack wildcard DNS for virtual-host addressing.
+        if ($provider === 'compatible' ? true : (bool) $this->config('use_path_style_endpoint', false)) {
+            $options['use_path_style_endpoint'] = true;
         }
 
         try {
@@ -60,9 +76,27 @@ class S3BucketProbeAdapter extends BaseProbeAdapter
                 'signature_version' => 'v4',
             ];
 
+            try {
+                $listStart = microtime(true);
+                $client->listObjectsV2(['Bucket' => $bucket, 'MaxKeys' => 1]);
+                $metrics['list_objects_ms'] = round((microtime(true) - $listStart) * 1000, 2);
+                $metrics['bucket_listable'] = true;
+            } catch (AwsException $e) {
+                // The key can reach the bucket (HeadBucket) but lack s3:ListBucket.
+                $awsMessage = $e->getAwsErrorMessage() ?: $e->getMessage();
+
+                return ProbeResult::down(
+                    'S3 list error: '.$awsMessage,
+                    [...$metrics, 'bucket_listable' => false],
+                    $headMs,
+                );
+            }
+
             return new ProbeResult($this->classifyLatency($headMs), $headMs, null, $metrics);
         } catch (AwsException $e) {
-            return ProbeResult::down('S3 error: '.$e->getAwsErrorMessage(), ['bucket_accessible' => false]);
+            $awsMessage = $e->getAwsErrorMessage() ?: $e->getMessage();
+
+            return ProbeResult::down('S3 error: '.$awsMessage, ['bucket_accessible' => false]);
         } catch (\Throwable $e) {
             return ProbeResult::down('S3 probe error: '.$e->getMessage(), ['bucket_accessible' => false]);
         }

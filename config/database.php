@@ -42,6 +42,10 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => 'prefer',
+            // The schema uses timestamptz while Eloquent binds wall-clock values in
+            // APP_TIMEZONE. Without this the server session (UTC) would store those
+            // wall times as UTC and shift every written timestamp by the offset.
+            'timezone' => env('APP_TIMEZONE', 'Asia/Jakarta'),
         ],
     ],
     'migrations' => [

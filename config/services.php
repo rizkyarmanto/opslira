@@ -13,7 +13,6 @@ return [
         'url' => env('GOTENBERG_URL', 'http://monitoring-gotenberg:3000'),
     ],
     'beszel' => [
-        'hub_url' => env('BESZEL_HUB_URL'),
         'token_cache_ttl' => env('BESZEL_TOKEN_CACHE_TTL', 43200), // 12 hours
     ],
     'telegram' => [

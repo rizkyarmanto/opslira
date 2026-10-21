@@ -2,26 +2,20 @@ import axios from 'axios';
 
 /**
  * Axios instance for internal API calls (/api/v1/*).
- * CSRF token read from the meta tag rendered by the Inertia root view.
+ *
+ * CSRF rides the encrypted XSRF-TOKEN cookie (withXSRFToken), which Laravel
+ * refreshes on every response. The render-time meta token must NOT be sent:
+ * login regenerates the session token, an SPA page navigation never re-renders
+ * the meta tag, and a stale X-CSRF-TOKEN header shadows the fresh X-XSRF-TOKEN
+ * header in Laravel's token lookup, which returns 419 on every POST.
  */
 export const api = axios.create({
     baseURL: '/api/v1',
+    withXSRFToken: true,
     headers: {
         'X-Requested-With': 'XMLHttpRequest',
         Accept: 'application/json',
     },
-});
-
-api.interceptors.request.use((config) => {
-    const token = document
-        .querySelector('meta[name="csrf-token"]')
-        ?.getAttribute('content');
-
-    if (token) {
-        config.headers['X-CSRF-TOKEN'] = token;
-    }
-
-    return config;
 });
 
 /**

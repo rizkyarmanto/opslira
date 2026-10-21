@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureAccountIsActive;
+use App\Http\Middleware\EnsureRunnerToken;
 use App\Http\Middleware\EnsureSuperAdmin;
 use App\Http\Middleware\HandleInertiaRequests;
 use Illuminate\Foundation\Application;
@@ -30,11 +31,18 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->group(base_path('app/Modules/Reporting/Routes/api.php'));
             Route::prefix('api/v1')
                 ->group(base_path('app/Modules/Users/Routes/api.php'));
+
+            // Internal runner endpoints: token only, never the web stack.
+            Route::prefix('internal')
+                ->group(base_path('app/Modules/Probes/Routes/internal.php'));
+            Route::prefix('internal')
+                ->group(base_path('app/Modules/Reporting/Routes/internal.php'));
         },
     )
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->alias([
             'super_admin' => EnsureSuperAdmin::class,
+            'runner' => EnsureRunnerToken::class,
         ]);
 
         $middleware->web(append: [

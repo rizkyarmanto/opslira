@@ -2,6 +2,7 @@ import type { TargetStatus } from '@/types/monitoring';
 
 const protocolLabels: Record<string, string> = {
     ICMP_SNMP: 'ICMP + SNMP',
+    ICMP_PING: 'ICMP ping',
     HTTP_HEALTH: 'cURL /health',
     WHOIS_SSL: 'WHOIS + SSL',
     DB_NATIVE_PING: 'Native DB',

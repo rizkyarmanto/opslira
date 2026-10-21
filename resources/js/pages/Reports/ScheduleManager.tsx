@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import { Head, router } from '@inertiajs/react';
-import { CalendarClock, FileText, Play } from 'lucide-react';
+import { CalendarClock, FileText, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import AppLayout from '@/components/shared/AppLayout';
 import Card from '@/components/shared/Card';
 import Button from '@/components/shared/Button';
+import ConfirmModal from '@/components/shared/ConfirmModal';
+import ReloadIndicator from '@/components/beautiful-ui/ReloadIndicator';
 import ToggleSwitch from '@/components/shared/ToggleSwitch';
+import ScheduleFormDrawer from '@/pages/Reports/ScheduleFormDrawer';
 import { api, apiErrorMessage } from '@/lib/api';
 import { formatDateTime } from '@/lib/time';
 import type { ReportSchedule } from '@/types/monitoring';
@@ -21,14 +24,56 @@ interface Props {
 export default function ScheduleManager({ schedules }: Props) {
     const [running, setRunning] = useState<string | null>(null);
     const [toggling, setToggling] = useState<string | null>(null);
+    const [reloading, setReloading] = useState(false);
+    const [deleting, setDeleting] = useState<string | null>(null);
+    const [confirmSchedule, setConfirmSchedule] = useState<ReportSchedule | null>(null);
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [editing, setEditing] = useState<ReportSchedule | null>(null);
     const [notice, setNotice] = useState<{ tone: 'ok' | 'info' | 'error'; text: string } | null>(null);
+
+    const reloadSchedules = () => {
+        router.reload({
+            only: ['schedules'],
+            onStart: () => setReloading(true),
+            onFinish: () => setReloading(false),
+        });
+    };
+
+    const openCreate = () => {
+        setEditing(null);
+        setDrawerOpen(true);
+    };
+
+    const openEdit = (schedule: ReportSchedule) => {
+        setEditing(schedule);
+        setDrawerOpen(true);
+    };
+
+    const removeSchedule = async () => {
+        if (!confirmSchedule) {
+            return;
+        }
+        const schedule = confirmSchedule;
+        setDeleting(schedule.id);
+        setNotice(null);
+        try {
+            await api.delete(`/reports/schedules/${schedule.id}`);
+            setNotice({ tone: 'ok', text: `Schedule "${schedule.name}" was deleted.` });
+            setConfirmSchedule(null);
+            reloadSchedules();
+        } catch (error) {
+            setNotice({ tone: 'error', text: apiErrorMessage(error, 'Failed to delete the schedule.') });
+        } finally {
+            setDeleting(null);
+        }
+    };
 
     const toggleActive = async (schedule: ReportSchedule) => {
         setToggling(schedule.id);
         setNotice(null);
         try {
             await api.put(`/reports/schedules/${schedule.id}`, { is_active: !schedule.is_active });
-            router.reload({ only: ['schedules'] });
+            reloadSchedules();
         } catch (error) {
             setNotice({ tone: 'error', text: apiErrorMessage(error, 'Failed to change the schedule status.') });
         } finally {
@@ -47,7 +92,7 @@ export default function ScheduleManager({ schedules }: Props) {
                 tone: data.outcome === 'created' ? 'ok' : 'info',
                 text: data.outcome === 'created' ? `Report "${schedule.name}" was created and sent.` : data.message,
             });
-            router.reload({ only: ['schedules'] });
+            reloadSchedules();
         } catch (error) {
             setNotice({ tone: 'error', text: apiErrorMessage(error, 'Failed to run this schedule.') });
         } finally {
@@ -61,11 +106,21 @@ export default function ScheduleManager({ schedules }: Props) {
 
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                 <p className="text-xs text-noc-muted">
-                    Reports are generated automatically on a cron schedule, then sent to registered recipients.
+                    {reloading ? (
+                        <ReloadIndicator label="Loading schedules" />
+                    ) : (
+                        'Reports are generated automatically on a cron schedule, then sent to registered recipients.'
+                    )}
                 </p>
-                <a href="/reports/email-logs" className="text-xs text-noc-accent hover:underline">
-                    View report and email history
-                </a>
+                <div className="flex items-center gap-4">
+                    <a href="/reports/email-logs" className="text-xs text-noc-accent hover:underline">
+                        View report and email history
+                    </a>
+                    <Button onClick={openCreate}>
+                        <Plus size={15} aria-hidden />
+                        Add schedule
+                    </Button>
+                </div>
             </div>
 
             {notice && (
@@ -88,9 +143,12 @@ export default function ScheduleManager({ schedules }: Props) {
                     <CalendarClock size={20} className="mx-auto text-noc-muted" aria-hidden />
                     <p className="mt-3 text-sm text-noc-text">No report schedules yet.</p>
                     <p className="mx-auto mt-1 max-w-md text-xs text-noc-muted">
-                        Report schedules are created through the seeder or the schedule endpoint. Once a schedule
-                        exists, its card appears here.
+                        Add the first schedule to start generating reports.
                     </p>
+                    <Button className="mt-4" onClick={openCreate}>
+                        <Plus size={15} aria-hidden />
+                        Add schedule
+                    </Button>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -146,25 +204,65 @@ export default function ScheduleManager({ schedules }: Props) {
                             </div>
 
                             <div className="mt-auto flex items-center justify-between gap-2 border-t border-noc-border pt-3">
-                                <span className="tabular text-[10px] text-noc-muted">
-                                    {schedule.next_run_at
-                                        ? `Next ${formatDateTime(schedule.next_run_at)}`
-                                        : 'Next run not calculated yet'}
-                                </span>
-                                <Button
-                                    variant="ghost"
-                                    loading={running === schedule.id}
-                                    onClick={() => runNow(schedule)}
-                                    className="!px-3 !py-1.5 !text-xs"
-                                >
-                                    <Play size={12} aria-hidden />
-                                    Run now
-                                </Button>
+                                {running === schedule.id ? (
+                                    <ReloadIndicator label="Running" />
+                                ) : (
+                                    <span className="tabular text-[10px] text-noc-muted">
+                                        {schedule.next_run_at
+                                            ? `Next ${formatDateTime(schedule.next_run_at)}`
+                                            : 'Next run not calculated yet'}
+                                    </span>
+                                )}
+                                <div className="flex items-center gap-1.5">
+                                    <Button
+                                        variant="ghost"
+                                        onClick={() => openEdit(schedule)}
+                                        className="!px-3 !py-1.5 !text-xs"
+                                    >
+                                        <Pencil size={12} aria-hidden />
+                                        Edit
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        loading={deleting === schedule.id}
+                                        onClick={() => setConfirmSchedule(schedule)}
+                                        className="!border-status-down/30 !px-3 !py-1.5 !text-xs !text-status-down hover:!bg-status-down/10"
+                                    >
+                                        <Trash2 size={12} aria-hidden />
+                                        Delete
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        loading={running === schedule.id}
+                                        onClick={() => runNow(schedule)}
+                                        className="!px-3 !py-1.5 !text-xs"
+                                    >
+                                        <Play size={12} aria-hidden />
+                                        Run now
+                                    </Button>
+                                </div>
                             </div>
                         </Card>
                     ))}
                 </div>
             )}
+
+            <ConfirmModal
+                open={confirmSchedule !== null}
+                title={`Delete schedule "${confirmSchedule?.name ?? ''}"?`}
+                message="Reports already generated stay in the history."
+                confirmLabel="Delete"
+                pending={deleting === confirmSchedule?.id}
+                onConfirm={() => void removeSchedule()}
+                onClose={() => setConfirmSchedule(null)}
+            />
+
+            <ScheduleFormDrawer
+                open={drawerOpen}
+                schedule={editing}
+                onClose={() => setDrawerOpen(false)}
+                onSaved={reloadSchedules}
+            />
         </AppLayout>
     );
 }

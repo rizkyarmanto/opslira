@@ -1,12 +1,49 @@
+import { useState } from 'react';
 import { Head, Link } from '@inertiajs/react';
-import { AlertTriangle, ArrowRight, Inbox } from 'lucide-react';
+import ReactECharts from 'echarts-for-react';
+import { AlertTriangle, ArrowRight, CheckCircle2, Inbox, XOctagon } from 'lucide-react';
 import AppLayout from '@/components/shared/AppLayout';
+import Button from '@/components/shared/Button';
 import Card from '@/components/shared/Card';
+import ReloadIndicator from '@/components/beautiful-ui/ReloadIndicator';
 import StatusBadge, { StatusRail } from '@/components/shared/StatusBadge';
 import SlidingNumber from '@/components/motion-primitives/SlidingNumber';
 import { relativeTime } from '@/lib/time';
 import { usePolling } from '@/lib/usePolling';
-import type { Incident, MonitoringTarget, NocSummary } from '@/types/monitoring';
+import type {
+    Incident,
+    MonitoringTarget,
+    NocSummary,
+    TargetStatus,
+} from '@/types/monitoring';
+
+interface SlaTrendPoint {
+    date: string;
+    uptime: number | null;
+    avg_latency: number | null;
+    incidents: number;
+}
+
+interface TargetDailySla {
+    target_id: string;
+    name: string;
+    current_status: TargetStatus;
+    uptime: number;
+    total_checks: number;
+    failed_checks: number;
+}
+
+type ChartTab = 'uptime' | 'latency';
+
+/** Bar fill for a daily SLA row, keyed by the target's own current_status.
+ *  Status is semantic data (DESIGN.md); the percentage never picks the color. */
+const slaBarFill: Record<TargetStatus, string> = {
+    UP: '#34d399',
+    DEGRADED: '#fbbf24',
+    DOWN: '#fb7185',
+    MAINTENANCE: '#38bdf8',
+    PENDING: 'transparent',
+};
 
 interface Props {
     summary: NocSummary & { maintenance: number };
@@ -14,6 +51,9 @@ interface Props {
     incidents: Incident[];
     globalSla: number | null;
     slaWindowDays: number | null;
+    slaTrend: SlaTrendPoint[] | null;
+    targetDailySla: TargetDailySla[] | null;
+    slaDate: string | null;
 }
 
 /**
@@ -21,14 +61,55 @@ interface Props {
  * So the hierarchy leads with the targets that are not healthy and the open
  * incidents, and the totals sit underneath as context (C-3, R-20).
  */
-export default function NocOverview({ summary, targets, incidents, globalSla, slaWindowDays }: Props) {
-    const { lastUpdated } = usePolling(['summary', 'targets', 'incidents', 'globalSla']);
+export default function NocOverview({
+    summary,
+    targets,
+    incidents,
+    globalSla,
+    slaWindowDays,
+    slaTrend,
+    targetDailySla,
+    slaDate,
+}: Props) {
+    const { lastUpdated, refreshing } = usePolling([
+        'summary',
+        'targets',
+        'incidents',
+        'globalSla',
+        'slaTrend',
+        'targetDailySla',
+    ]);
+
+    const [showAllTargets, setShowAllTargets] = useState(false);
+    const [chartTab, setChartTab] = useState<ChartTab>('uptime');
+    const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
     const needsAttention = targets.filter(
         (t) => t.current_status === 'DOWN' || t.current_status === 'DEGRADED',
     );
-    const healthy = targets.filter((t) => t.current_status === 'UP');
-    const unprobed = targets.filter((t) => t.current_status === 'PENDING');
+
+    const slaPoints = slaTrend ?? [];
+    const dailySla = targetDailySla ?? [];
+    const hasSlaTrend = slaPoints.length > 0;
+
+    // A tab only renders for a series the backend actually returned, and an
+    // unavailable tab falls back to the first one that does have data.
+    const chartTabs = [
+        { key: 'uptime' as ChartTab, label: 'Uptime %', available: hasSlaTrend },
+        { key: 'latency' as ChartTab, label: 'Latency ms', available: hasSlaTrend },
+    ].filter((tab) => tab.available);
+    const activeTab: ChartTab = chartTabs.some((tab) => tab.key === chartTab)
+        ? chartTab
+        : (chartTabs[0]?.key ?? 'uptime');
+
+    // A chart click drills the lists below to one calendar day. The slice keeps
+    // the same Y-m-d grouping the backend uses for its daily rows.
+    const visibleAttention = selectedDate
+        ? needsAttention.filter((t) => t.last_checked_at?.slice(0, 10) === selectedDate)
+        : needsAttention;
+    const visibleIncidents = selectedDate
+        ? incidents.filter((i) => i.started_at.slice(0, 10) === selectedDate)
+        : incidents;
 
     return (
         <AppLayout title="NOC Overview">
@@ -36,30 +117,218 @@ export default function NocOverview({ summary, targets, incidents, globalSla, sl
 
             <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <p className="text-xs text-noc-muted">
-                    {lastUpdated
-                        ? `Updated ${lastUpdated.toLocaleTimeString('en-US')}`
-                        : 'Loading latest status...'}
+                    {refreshing ? (
+                        <ReloadIndicator label="Refreshing status" />
+                    ) : lastUpdated ? (
+                        `Updated ${lastUpdated.toLocaleTimeString('en-US')}`
+                    ) : (
+                        'Loading latest status...'
+                    )}
                 </p>
                 <p className="text-xs text-noc-muted">Refreshes every 15 seconds while the tab is active.</p>
             </div>
+
+            {/* Executive strip: the four verdict numbers in one row. Needs attention
+                leads and carries the largest figure, so the screen's one focal point
+                reads first (C-3, ENERGY 2). Three cells are real links to the list
+                that answers them; the SLA cell is display-only because no filtered
+                view exists for it (R-24, R-26). Icons plus labels pair every value,
+                so color is never the only carrier. */}
+            <section aria-label="Status summary" className="mb-6">
+                <Card className="grid grid-cols-2 gap-px overflow-hidden bg-noc-border md:grid-cols-4">
+                    <Link
+                        href="/targets?status=DOWN"
+                        aria-label="View DOWN targets"
+                        className="bg-noc-surface px-4 py-3 transition-colors hover:bg-white/[0.03]"
+                    >
+                        <div className="flex items-center gap-1.5">
+                            <AlertTriangle size={13} className="text-status-degraded" aria-hidden />
+                            <span className="field-label">Needs attention</span>
+                        </div>
+                        <p className="tabular mt-1 text-3xl font-semibold text-status-down">
+                            {summary.down + summary.degraded}
+                        </p>
+                    </Link>
+                    <Link
+                        href="/targets?status=UP"
+                        aria-label="View UP targets"
+                        className="bg-noc-surface px-4 py-3 transition-colors hover:bg-white/[0.03]"
+                    >
+                        <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={13} className="text-status-up" aria-hidden />
+                            <span className="field-label">UP</span>
+                        </div>
+                        <p className="tabular mt-1 text-2xl font-semibold text-status-up">
+                            <SlidingNumber value={summary.up} />
+                        </p>
+                    </Link>
+                    <Link
+                        href="/dashboard/alerts"
+                        aria-label="View open incidents"
+                        className="bg-noc-surface px-4 py-3 transition-colors hover:bg-white/[0.03]"
+                    >
+                        <div className="flex items-center gap-1.5">
+                            <XOctagon size={13} className="text-status-down" aria-hidden />
+                            <span className="field-label">Open incidents</span>
+                        </div>
+                        <p className="tabular mt-1 text-2xl font-semibold text-status-down">
+                            <SlidingNumber value={incidents.length} />
+                        </p>
+                    </Link>
+                    <div className="bg-noc-surface px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={13} className="text-status-up" aria-hidden />
+                            <span className="field-label">
+                                SLA {slaWindowDays ? `last ${slaWindowDays} days` : ''}
+                            </span>
+                        </div>
+                        {globalSla === null ? (
+                            <p className="mt-1 text-sm text-noc-muted">
+                                No daily data yet. SLA appears after the first rollup runs.
+                            </p>
+                        ) : (
+                            <p className="tabular mt-1 text-2xl font-semibold text-status-up">
+                                <SlidingNumber value={globalSla} decimals={2} suffix="%" />
+                            </p>
+                        )}
+                    </div>
+                </Card>
+            </section>
+
+            {/* Daily trend: the rollup's answer to how the fleet has been doing */}
+            <section className="mb-8" aria-label="Daily trend">
+                <Card className="px-4 py-4">
+                    {!hasSlaTrend ? (
+                        <p className="py-6 text-center text-sm text-noc-muted">
+                            No daily data yet. Trends appear after the rollup runs.
+                        </p>
+                    ) : (
+                        <>
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                                <h2 className="text-sm font-semibold text-noc-text">
+                                    {activeTab === 'uptime' && 'Uptime trend, last 30 days'}
+                                    {activeTab === 'latency' && 'Latency trend, last 30 days'}
+                                </h2>
+                                <div className="flex items-center gap-1">
+                                    {chartTabs.map((tab) => (
+                                        <button
+                                            key={tab.key}
+                                            type="button"
+                                            aria-pressed={activeTab === tab.key}
+                                            onClick={() => setChartTab(tab.key)}
+                                            className={`rounded-xs px-2.5 py-1 text-xs transition-colors ${
+                                                activeTab === tab.key
+                                                    ? 'bg-white/5 font-medium text-noc-text'
+                                                    : 'text-noc-muted hover:text-noc-text'
+                                            }`}
+                                        >
+                                            {tab.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <ReactECharts
+                                key={activeTab}
+                                option={buildTrendOption(activeTab, slaPoints)}
+                                style={{ height: 260 }}
+                                onEvents={{
+                                    click: (params: { name?: unknown }) => {
+                                        const day =
+                                            typeof params?.name === 'string' ? params.name : '';
+                                        if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+                                            setSelectedDate(day);
+                                        }
+                                    },
+                                }}
+                            />
+                        </>
+                    )}
+                </Card>
+            </section>
+
+            {/* System SLA: the rollup's per-target verdict for one calendar day.
+                Rows come sorted worst-first from the backend, so the target most
+                likely to need attention reads first (C-3). The bar fill names the
+                target's real status, never a threshold invented here. */}
+            <section className="mb-8" aria-labelledby="system-sla-heading">
+                <div className="mb-3 flex items-center gap-2">
+                    <h2 id="system-sla-heading" className="text-sm font-semibold text-noc-text">
+                        {slaDate ? `System SLA by target, ${slaDate}` : 'System SLA by target'}
+                    </h2>
+                </div>
+
+                {dailySla.length === 0 ? (
+                    <Card className="px-4 py-6">
+                        <p className="text-sm text-noc-muted">
+                            No daily data yet. Per-target SLA appears after the rollup runs.
+                        </p>
+                    </Card>
+                ) : (
+                    <div className="space-y-2">
+                        {dailySla.map((row) => (
+                            <Link
+                                key={row.target_id}
+                                href={`/targets/${row.target_id}`}
+                                className="flex items-center gap-4 rounded-md border border-noc-border bg-noc-surface px-4 py-3 transition-colors hover:bg-white/[0.03]"
+                            >
+                                <div className="flex min-w-0 items-center gap-3 sm:w-72">
+                                    <p className="truncate text-sm font-medium text-noc-text">{row.name}</p>
+                                    <StatusBadge status={row.current_status} />
+                                </div>
+                                <div className="flex h-6 flex-1 items-center">
+                                    <div className="h-2 w-full overflow-hidden rounded-xs bg-white/5">
+                                        <div
+                                            className="h-full rounded-xs"
+                                            style={{
+                                                width: `${row.uptime}%`,
+                                                backgroundColor: slaBarFill[row.current_status],
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+                                <span className="tabular w-24 shrink-0 text-right text-sm text-noc-text">
+                                    {row.uptime.toFixed(2)}%
+                                </span>
+                                <span className="tabular hidden w-28 shrink-0 text-right text-xs text-noc-muted sm:block">
+                                    {row.total_checks} checks
+                                </span>
+                            </Link>
+                        ))}
+                    </div>
+                )}
+            </section>
 
             {/* Focal point: what is not healthy */}
             <section className="mb-8" aria-labelledby="attention-heading">
                 <div className="mb-3 flex items-center gap-2">
                     <AlertTriangle
                         size={16}
-                        className={needsAttention.length > 0 ? 'text-status-down' : 'text-noc-muted'}
+                        className={visibleAttention.length > 0 ? 'text-status-down' : 'text-noc-muted'}
                         aria-hidden
                     />
                     <h2 id="attention-heading" className="text-sm font-semibold text-noc-text">
                         Needs attention
                     </h2>
                     <span className="tabular rounded-xs bg-white/5 px-2 py-0.5 text-[11px] text-noc-muted">
-                        {needsAttention.length}
+                        {visibleAttention.length}
                     </span>
+                    {selectedDate && (
+                        <span className="tabular rounded-xs bg-white/5 px-2 py-0.5 text-[11px] text-noc-muted">
+                            Showing {selectedDate}
+                        </span>
+                    )}
+                    {selectedDate && (
+                        <Button
+                            variant="ghost"
+                            className="ml-auto px-2.5 py-1 text-xs"
+                            onClick={() => setSelectedDate(null)}
+                        >
+                            Clear
+                        </Button>
+                    )}
                 </div>
 
-                {needsAttention.length === 0 && incidents.length === 0 ? (
+                {visibleAttention.length === 0 && visibleIncidents.length === 0 ? (
                     <Card className="flex items-center gap-3 px-4 py-4">
                         <Inbox size={16} className="text-noc-muted" aria-hidden />
                         <p className="text-sm text-noc-muted">
@@ -68,7 +337,7 @@ export default function NocOverview({ summary, targets, incidents, globalSla, sl
                     </Card>
                 ) : (
                     <div className="space-y-2">
-                        {needsAttention.map((target) => (
+                        {visibleAttention.map((target) => (
                             <Link
                                 key={target.id}
                                 href={`/targets/${target.id}`}
@@ -94,7 +363,7 @@ export default function NocOverview({ summary, targets, incidents, globalSla, sl
                             </Link>
                         ))}
 
-                        {incidents.map((incident) => (
+                        {visibleIncidents.map((incident) => (
                             <div
                                 key={incident.id}
                                 className="relative flex items-start gap-4 overflow-hidden rounded-md border border-noc-border bg-noc-surface px-4 py-3 pl-5"
@@ -129,42 +398,6 @@ export default function NocOverview({ summary, targets, incidents, globalSla, sl
                 )}
             </section>
 
-            {/* Context: the totals */}
-            <section className="mb-8" aria-labelledby="summary-heading">
-                <h2 id="summary-heading" className="mb-3 text-sm font-semibold text-noc-text">
-                    Summary
-                </h2>
-                <Card className="grid grid-cols-2 gap-px overflow-hidden bg-noc-border md:grid-cols-6">
-                    <SummaryCell label="Total targets" value={summary.total} />
-                    <SummaryCell label="UP" value={summary.up} tone="up" />
-                    <SummaryCell label="Degraded" value={summary.degraded} tone="degraded" />
-                    <SummaryCell label="Down" value={summary.down} tone="down" />
-                    <SummaryCell label="Maintenance" value={summary.maintenance} tone="maintenance" />
-                    <SummaryCell label="Not yet checked" value={unprobed.length} tone="pending" />
-                </Card>
-
-                <Card className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-                    <div>
-                        <p className="field-label">SLA {slaWindowDays ? `last ${slaWindowDays} days` : ''}</p>
-                        {globalSla === null ? (
-                            <p className="mt-0.5 text-sm text-noc-muted">
-                                No daily data yet. SLA appears after the first rollup runs.
-                            </p>
-                        ) : (
-                            <p className="mt-0.5 font-display text-display-sm text-status-up">
-                                <SlidingNumber value={globalSla} decimals={2} suffix="%" />
-                            </p>
-                        )}
-                    </div>
-                    {unprobed.length > 0 && (
-                        <p className="text-xs text-noc-muted">
-                            {unprobed.length} targets have never been checked. Run the probe scheduler to
-                            populate their status.
-                        </p>
-                    )}
-                </Card>
-            </section>
-
             {/* Full inventory */}
             <section aria-labelledby="all-targets-heading">
                 <div className="mb-3 flex items-center gap-2">
@@ -186,54 +419,120 @@ export default function NocOverview({ summary, targets, incidents, globalSla, sl
                         </Link>
                     </Card>
                 ) : (
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        {targets.map((target) => (
-                            <Link
-                                key={target.id}
-                                href={`/targets/${target.id}`}
-                                className="relative flex items-center gap-3 overflow-hidden rounded-md border border-noc-border bg-noc-surface px-4 py-3 pl-5 hover:border-zinc-600"
+                    <>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                            {(showAllTargets ? targets : targets.slice(0, 12)).map((target) => (
+                                <Link
+                                    key={target.id}
+                                    href={`/targets/${target.id}`}
+                                    className="relative flex items-center gap-3 overflow-hidden rounded-md border border-noc-border bg-noc-surface px-4 py-3 pl-5 hover:border-zinc-600"
+                                >
+                                    <StatusRail status={target.current_status} />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate text-sm font-medium text-noc-text">{target.name}</p>
+                                        <p className="tabular truncate text-xs text-noc-muted">
+                                            {target.host_or_endpoint}
+                                            {target.port ? `:${target.port}` : ''}
+                                        </p>
+                                    </div>
+                                    <StatusBadge status={target.current_status} />
+                                </Link>
+                            ))}
+                        </div>
+                        {!showAllTargets && targets.length > 12 && (
+                            <Button
+                                variant="ghost"
+                                className="mt-3"
+                                onClick={() => setShowAllTargets(true)}
                             >
-                                <StatusRail status={target.current_status} />
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm font-medium text-noc-text">{target.name}</p>
-                                    <p className="tabular truncate text-xs text-noc-muted">
-                                        {target.host_or_endpoint}
-                                        {target.port ? `:${target.port}` : ''}
-                                    </p>
-                                </div>
-                                <StatusBadge status={target.current_status} />
-                            </Link>
-                        ))}
-                    </div>
+                                Show all {targets.length} targets
+                            </Button>
+                        )}
+                    </>
                 )}
             </section>
         </AppLayout>
     );
 }
 
-function SummaryCell({
-    label,
-    value,
-    tone,
-}: {
-    label: string;
-    value: number;
-    tone?: 'up' | 'degraded' | 'down' | 'maintenance' | 'pending';
-}) {
-    const toneClass = {
-        up: 'text-status-up',
-        degraded: 'text-status-degraded',
-        down: 'text-status-down',
-        maintenance: 'text-status-maintenance',
-        pending: 'text-noc-muted',
-    }[tone ?? 'up'];
+interface TrendTooltipParam {
+    seriesName: string;
+    value: number | null;
+    axisValueLabel: string;
+}
 
-    return (
-        <div className="bg-noc-surface px-4 py-3">
-            <p className="field-label">{label}</p>
-            <p className={`tabular mt-1 text-2xl font-semibold ${tone ? toneClass : 'text-noc-text'}`}>
-                <SlidingNumber value={value} />
-            </p>
-        </div>
-    );
+/** Tooltip body shared by every tab: the day, then each series' exact reading. */
+function trendTooltip(params: TrendTooltipParam[] | TrendTooltipParam, format: (v: number) => string) {
+    const list = Array.isArray(params) ? params : [params];
+    const day = list[0]?.axisValueLabel ?? '';
+    const lines = list.map((p) => `${p.seriesName}: ${typeof p.value === 'number' ? format(p.value) : 'n/a'}`);
+    return [day, ...lines].join('<br/>');
+}
+
+/**
+ * Option for the daily trend chart. One question per tab, only series the
+ * backend returned, and the line axes start at the data minimum so a 99% to
+ * 100% range reads as a trend instead of a flat line pinned to zero (C-3,
+ * R-17). Animation plays once when a tab mounts the chart and never on the
+ * 15-second polling update, so motion marks a state change and stops
+ * (DESIGN.md, R-19, MOTION 1).
+ */
+function buildTrendOption(tab: ChartTab, slaPoints: SlaTrendPoint[]) {
+    const shared = {
+        backgroundColor: 'transparent',
+        animation: true,
+        animationDuration: 350,
+        animationDurationUpdate: 0,
+        grid: { left: 48, right: 20, top: 36, bottom: 36 },
+        tooltip: {
+            trigger: 'axis',
+            backgroundColor: '#131316',
+            borderColor: '#27272a',
+            textStyle: { color: '#f4f4f5', fontSize: 12 },
+        },
+        legend: {
+            textStyle: { color: '#a1a1aa', fontSize: 11 },
+            top: 0,
+            icon: 'roundRect',
+        },
+        xAxis: {
+            type: 'category' as const,
+            data: [] as string[],
+            axisLine: { lineStyle: { color: '#3f3f46' } },
+            axisLabel: { color: '#a1a1aa', fontSize: 10, hideOverlap: true },
+        },
+        yAxis: {
+            type: 'value' as const,
+            nameTextStyle: { color: '#a1a1aa', fontSize: 10 },
+            axisLabel: { color: '#a1a1aa', fontSize: 10 },
+            splitLine: { lineStyle: { color: '#27272a' } },
+        },
+    };
+
+    const uptime = tab === 'uptime';
+    const seriesName = uptime ? 'Uptime %' : 'Latency ms';
+    const color = uptime ? '#34d399' : '#38bdf8';
+
+    return {
+        ...shared,
+        tooltip: {
+            ...shared.tooltip,
+            formatter: (params: TrendTooltipParam[] | TrendTooltipParam) =>
+                trendTooltip(params, (v) => (uptime ? `${v.toFixed(2)}%` : `${v.toFixed(1)} ms`)),
+        },
+        legend: { ...shared.legend, data: [seriesName] },
+        xAxis: { ...shared.xAxis, data: slaPoints.map((p) => p.date) },
+        yAxis: { ...shared.yAxis, name: uptime ? '%' : 'ms', min: 'dataMin' },
+        series: [
+            {
+                name: seriesName,
+                type: 'line',
+                symbolSize: 5,
+                connectNulls: false,
+                data: slaPoints.map((p) => (uptime ? p.uptime : p.avg_latency)),
+                itemStyle: { color },
+                lineStyle: { color },
+            },
+        ],
+    };
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link, usePage } from '@inertiajs/react';
 import {
+    Bell,
     FileText,
     Gauge,
     Mail,
@@ -12,6 +13,7 @@ import {
 } from 'lucide-react';
 import CommandPalette from '@/components/beautiful-ui/CommandPalette';
 import FlashMessages from '@/components/shared/FlashMessages';
+import HeaderClock from '@/components/shared/HeaderClock';
 import ErrorBoundary from '@/components/shared/ErrorBoundary';
 import type { SharedPageProps } from '@/types/inertia';
 
@@ -24,11 +26,13 @@ interface NavItem {
 
 /**
  * Navigation reflects the pages that exist, nothing more (R-24).
- * Icons name what the section holds: gauge for the overview, network for devices,
- * server for apps and databases, mail for the mail and storage group.
+ * Icons name what the section holds: gauge for the overview, bell for alerts,
+ * network for devices, server for apps and databases, mail for the mail and
+ * storage group.
  */
 const navItems: NavItem[] = [
     { label: 'NOC Overview', href: '/dashboard/noc', icon: <Gauge size={16} aria-hidden />, match: '/dashboard/noc' },
+    { label: 'Alerts', href: '/dashboard/alerts', icon: <Bell size={16} aria-hidden />, match: '/dashboard/alerts' },
     { label: 'Network', href: '/dashboard/network', icon: <Network size={16} aria-hidden />, match: '/dashboard/network' },
     { label: 'App, Domain & DB', href: '/dashboard/apps-domains-db', icon: <Server size={16} aria-hidden />, match: '/dashboard/apps-domains-db' },
     { label: 'Mail, S3 & Beszel', href: '/dashboard/mail-s3-beszel', icon: <Mail size={16} aria-hidden />, match: '/dashboard/mail-s3-beszel' },
@@ -67,7 +71,7 @@ export default function AppLayout({ children, title }: { children: ReactNode; ti
                         <span className="font-display text-base font-bold tracking-tight">OPSLIRA</span>
                     </Link>
 
-                    <div className="hidden flex-1 justify-center md:flex">
+                    <div className="flex flex-1 justify-center">
                         <CommandPalette />
                     </div>
 
@@ -112,6 +116,9 @@ export default function AppLayout({ children, title }: { children: ReactNode; ti
                             </Link>
                         );
                     })}
+                    <div className="ml-auto hidden shrink-0 items-center self-center py-2 pl-3 sm:flex">
+                        <HeaderClock />
+                    </div>
                 </nav>
             </header>
 

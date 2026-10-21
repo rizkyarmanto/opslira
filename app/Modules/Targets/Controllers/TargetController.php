@@ -4,6 +4,7 @@ namespace App\Modules\Targets\Controllers;
 
 use App\Modules\Probes\Contracts\ProbeResult;
 use App\Modules\Probes\Services\ProbeAdapterFactory;
+use App\Modules\Probes\Services\ProbeFailureLogger;
 use App\Modules\Probes\Services\TargetStateService;
 use App\Modules\Targets\Models\MonitoringTarget;
 use App\Modules\Targets\Models\TargetCredential;
@@ -21,6 +22,7 @@ class TargetController
         private readonly CredentialEncryptionService $encryption,
         private readonly ProbeAdapterFactory $factory,
         private readonly TargetStateService $state,
+        private readonly ProbeFailureLogger $failures,
     ) {
     }
 
@@ -41,15 +43,36 @@ class TargetController
             $query->where('current_status', $status);
         }
 
+        // Default list is active targets: disabled rows are kept out until the
+        // operator asks for them, so a soft-deleted target stops cluttering the
+        // list the moment it is switched off.
+        $state = $request->query('state', 'active');
+        if ($state === 'disabled') {
+            $query->where('is_active', false);
+        } elseif ($state !== 'all') {
+            $query->where('is_active', true);
+        }
+
+        // Default hides rows in maintenance: a paused target is not something the
+        // operator acts on, and `maintenance=all` shows both again.
+        $maintenance = $request->query('maintenance', 'no');
+        if ($maintenance === 'yes') {
+            $query->where('is_maintenance', true);
+        } elseif ($maintenance === 'no') {
+            $query->where('is_maintenance', false);
+        }
+
         return Inertia::render('Targets/TargetIndex', [
             'targets' => $query->orderBy('name')->get(),
-            'filters' => $request->only(['dashboard_group', 'target_type', 'environment', 'status']),
+            'filters' => $request->only([
+                'dashboard_group', 'target_type', 'environment', 'status', 'state', 'maintenance',
+            ]),
         ]);
     }
 
     public function store(StoreTargetRequest $request): JsonResponse
     {
-        $data = $request->validated();
+        $data = $this->normalizeTargetPayload($request->validated());
 
         $target = MonitoringTarget::create([
             ...$data,
@@ -70,21 +93,33 @@ class TargetController
     public function search(Request $request): JsonResponse
     {
         $term = trim((string) $request->query('q', ''));
+        $escaped = str_replace(['%', '_'], ['\\%', '\\_'], $term);
+        $like = '%'.$escaped.'%';
+        $prefix = $escaped.'%';
 
         $targets = MonitoringTarget::query()
             ->where('is_active', true)
-            ->when($term !== '', function ($query) use ($term) {
-                $like = '%'.str_replace(['%', '_'], ['\\%', '\\_'], $term).'%';
+            ->when($term !== '', function ($query) use ($like) {
                 $query->where(function ($q) use ($like) {
                     $q->where('name', 'ilike', $like)
                         ->orWhere('host_or_endpoint', 'ilike', $like)
                         ->orWhere('target_type', 'ilike', $like)
-                        ->orWhere('protocol_type', 'ilike', $like);
+                        ->orWhere('protocol_type', 'ilike', $like)
+                        ->orWhere('environment', 'ilike', $like);
                 });
             })
+            // A name or host that starts with what was typed beats a match in the
+            // middle of a word, so typing "8.8" surfaces the host first.
+            ->orderByRaw(
+                'CASE WHEN name ILIKE ? THEN 0 WHEN host_or_endpoint ILIKE ? THEN 1 ELSE 2 END',
+                [$prefix, $prefix]
+            )
             ->orderBy('name')
             ->limit(12)
-            ->get(['id', 'name', 'host_or_endpoint', 'target_type', 'protocol_type', 'current_status']);
+            ->get([
+                'id', 'name', 'host_or_endpoint', 'port', 'dashboard_group', 'target_type',
+                'protocol_type', 'current_status', 'is_maintenance',
+            ]);
 
         return response()->json(['data' => $targets]);
     }
@@ -106,7 +141,7 @@ class TargetController
 
     public function update(UpdateTargetRequest $request, MonitoringTarget $target): JsonResponse
     {
-        $data = $request->validated();
+        $data = $this->normalizeTargetPayload($request->validated());
         unset($data['credentials']);
 
         $target->update($data);
@@ -145,9 +180,12 @@ class TargetController
 
             /** @var ProbeResult $result */
             $result = $adapter->execute();
+            $this->failures->record($target, $result, 'test');
 
             return response()->json($result->toArray());
         } catch (\Throwable $e) {
+            $this->failures->record($target, ProbeResult::down($e->getMessage()), 'test');
+
             return response()->json([
                 'status' => 'DOWN',
                 'responseTimeMs' => null,
@@ -163,21 +201,38 @@ class TargetController
     public function testConnectionPayload(Request $request): JsonResponse
     {
         $data = $request->all();
+        // Not saved yet: the logger still needs name, type, and host to say which
+        // check failed, so it gets a transient target with the form values.
+        $transient = new MonitoringTarget([
+            'name' => (string) ($data['name'] ?? 'Unsaved target test'),
+            'dashboard_group' => (string) ($data['dashboard_group'] ?? 'NETWORK'),
+            'target_type' => (string) ($data['target_type'] ?? 'NETWORK_DEVICE'),
+            'protocol_type' => (string) ($data['protocol_type'] ?? 'ICMP_SNMP'),
+            'host_or_endpoint' => (string) ($data['host_or_endpoint'] ?? ''),
+        ]);
 
         try {
+            $data = $this->normalizeTargetPayload($data);
             $adapter = $this->factory->make($data['protocol_type']);
             $config = [
                 ...($data['config_payload'] ?? []),
                 'host' => $data['host_or_endpoint'] ?? null,
                 'port' => $data['port'] ?? null,
             ];
-            $adapter->configure($config, []);
+            $credentials = [];
+            if (! empty($data['credentials']['auth_type']) && $data['credentials']['auth_type'] !== 'NONE') {
+                $credentials = $data['credentials']['payload'] ?? [];
+            }
+            $adapter->withTimeoutSeconds((int) ($data['timeout_seconds'] ?? 5))->configure($config, $credentials);
 
             /** @var ProbeResult $result */
             $result = $adapter->execute();
+            $this->failures->record($transient, $result, 'test');
 
             return response()->json($result->toArray());
         } catch (\Throwable $e) {
+            $this->failures->record($transient, ProbeResult::down($e->getMessage()), 'test');
+
             return response()->json([
                 'status' => 'DOWN',
                 'responseTimeMs' => null,
@@ -210,9 +265,35 @@ class TargetController
         ]);
     }
 
+    /**
+     * INTERNET targets are ping only. The protocol is forced and the ping-only
+     * flag is set server-side, so a client cannot switch the target back onto
+     * TCP fallback or SNMP; any other type must not inherit the flag.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private function normalizeTargetPayload(array $data): array
+    {
+        if (($data['target_type'] ?? null) === 'INTERNET') {
+            $data['protocol_type'] = 'ICMP_PING';
+            $data['config_payload'] = [...($data['config_payload'] ?? []), 'icmp_only' => true];
+
+            return $data;
+        }
+
+        if (is_array($data['config_payload'] ?? null)) {
+            unset($data['config_payload']['icmp_only']);
+        }
+
+        return $data;
+    }
+
     private function persistCredentials(MonitoringTarget $target, ?array $credentials): void
     {
         if (empty($credentials) || empty($credentials['auth_type']) || $credentials['auth_type'] === 'NONE') {
+            $target->credentials()->delete();
+
             return;
         }
 

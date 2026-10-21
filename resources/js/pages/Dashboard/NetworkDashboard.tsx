@@ -5,6 +5,7 @@ import Card from '@/components/shared/Card';
 import StatusBadge from '@/components/shared/StatusBadge';
 import StatusCard from '@/components/beautiful-ui/StatusCard';
 import ProtocolBadge from '@/components/beautiful-ui/ProtocolBadge';
+import ReloadIndicator from '@/components/beautiful-ui/ReloadIndicator';
 import SlidingNumber from '@/components/motion-primitives/SlidingNumber';
 import { relativeTime } from '@/lib/time';
 import { usePolling } from '@/lib/usePolling';
@@ -12,6 +13,7 @@ import type { MonitoringTarget } from '@/types/monitoring';
 
 interface Props {
     targets: MonitoringTarget[];
+    internetTargets: MonitoringTarget[];
     trafficSummary: Record<string, { rx_mbps: number; tx_mbps: number }>;
 }
 
@@ -21,11 +23,17 @@ interface Props {
  * device with no SNMP reading says so instead of drawing a flat line at zero
  * (C-3, R-17).
  */
-export default function NetworkDashboard({ targets, trafficSummary }: Props) {
-    const { lastUpdated } = usePolling(['targets', 'trafficSummary']);
+export default function NetworkDashboard({ targets, internetTargets, trafficSummary }: Props) {
+    const { lastUpdated, refreshing } = usePolling(['targets', 'trafficSummary']);
 
+    // The traffic chart reads SNMP from devices only, so Internet hosts are split
+    // out before the chart and rendered as their own section below.
+    const devices = targets.filter((t) => t.target_type !== 'INTERNET');
+    const internet = internetTargets;
+
+    const deviceNames = new Set(devices.map((d) => d.name));
     const series = Object.entries(trafficSummary).filter(
-        ([, v]) => v.rx_mbps > 0 || v.tx_mbps > 0,
+        ([name, v]) => deviceNames.has(name) && (v.rx_mbps > 0 || v.tx_mbps > 0),
     );
     const names = series.map(([name]) => name);
     const hasTraffic = series.length > 0;
@@ -86,11 +94,17 @@ export default function NetworkDashboard({ targets, trafficSummary }: Props) {
 
             <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <p className="text-xs text-noc-muted">
-                    {lastUpdated
-                        ? `Updated ${lastUpdated.toLocaleTimeString('en-US')}`
-                        : 'Loading latest status...'}
+                    {refreshing ? (
+                        <ReloadIndicator label="Refreshing status" />
+                    ) : lastUpdated ? (
+                        `Updated ${lastUpdated.toLocaleTimeString('en-US')}`
+                    ) : (
+                        'Loading latest status...'
+                    )}
                 </p>
-                <p className="text-xs text-noc-muted">{targets.length} devices monitored.</p>
+                <p className="text-xs text-noc-muted">
+                    {devices.length} devices and {internet.length} Internet hosts monitored.
+                </p>
             </div>
 
             <Card className="mb-6 px-4 py-4">
@@ -107,71 +121,159 @@ export default function NetworkDashboard({ targets, trafficSummary }: Props) {
                 )}
             </Card>
 
-            {targets.length === 0 ? (
-                <Card className="px-4 py-8 text-center">
-                    <p className="text-sm text-noc-muted">
-                        No network devices registered yet. Add a target of type Network Device.
-                    </p>
-                    <Link href="/targets" className="btn-primary mt-3">
-                        Open the Targets page
-                    </Link>
-                </Card>
-            ) : (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {targets.map((target) => {
-                        const metrics = (target.state?.summary_metrics ?? {}) as Record<string, number>;
-
-                        return (
-                            <StatusCard
-                                key={target.id}
-                                status={target.current_status}
-                                heartbeat={target.heartbeat}
-                                header={
-                                    <>
-                                        <div className="flex items-center gap-2">
-                                            <p className="truncate text-sm font-medium text-noc-text">{target.name}</p>
-                                        </div>
-                                        <p className="tabular mt-1 truncate text-xs text-noc-muted">
-                                            {target.host_or_endpoint}
-                                        </p>
-                                    </>
-                                }
-                                footer={
-                                    <div className="flex items-center justify-between gap-2">
-                                        <ProtocolBadge protocolType={target.protocol_type} />
-                                        <span className="text-[10px] text-noc-muted">
-                                            {relativeTime(target.last_checked_at) ?? 'Not yet checked'}
-                                        </span>
-                                    </div>
-                                }
-                            >
-                                <div className="mb-3 flex items-center justify-between gap-2">
-                                    <StatusBadge status={target.current_status} />
-                                    <span className="tabular text-[10px] text-noc-muted">
-                                        {target.config_payload?.sub_type
-                                            ? String(target.config_payload.sub_type)
-                                            : 'Device'}
-                                    </span>
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-3">
-                                    <Metric
-                                        label="Latency"
-                                        value={metrics.last_latency_ms ?? target.state?.last_latency_ms ?? null}
-                                        unit=" ms"
-                                    />
-                                    <Metric label="Packet loss" value={metrics.packet_loss_pct ?? null} unit="%" />
-                                </div>
-
-                                <div className="mt-3 space-y-2">
-                                    <ProgressBar label="CPU" value={metrics.cpu_usage_pct ?? null} />
-                                    <ProgressBar label="Memory" value={metrics.mem_usage_pct ?? null} />
-                                </div>
-                            </StatusCard>
-                        );
-                    })}
+            {/* Network devices: SNMP-capable hardware */}
+            <section className="mb-8" aria-labelledby="devices-heading">
+                <div className="mb-3 flex items-center gap-2">
+                    <h2 id="devices-heading" className="text-sm font-semibold text-noc-text">
+                        Network devices
+                    </h2>
+                    <span className="tabular rounded-xs bg-white/5 px-2 py-0.5 text-[11px] text-noc-muted">
+                        {devices.length}
+                    </span>
                 </div>
-            )}
+
+                {devices.length === 0 ? (
+                    <Card className="px-4 py-8 text-center">
+                        <p className="text-sm text-noc-muted">No network devices registered yet.</p>
+                        <Link href="/targets" className="btn-primary mt-3">
+                            Open the Targets page
+                        </Link>
+                    </Card>
+                ) : (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                        {devices.map((target) => {
+                            const metrics = (target.state?.summary_metrics ?? {}) as Record<string, number>;
+
+                            return (
+                                <StatusCard
+                                    key={target.id}
+                                    status={target.current_status}
+                                    heartbeat={target.heartbeat}
+                                    header={
+                                        <>
+                                            <div className="flex items-center gap-2">
+                                                <p className="truncate text-sm font-medium text-noc-text">
+                                                    {target.name}
+                                                </p>
+                                            </div>
+                                            <p className="tabular mt-1 truncate text-xs text-noc-muted">
+                                                {target.host_or_endpoint}
+                                            </p>
+                                        </>
+                                    }
+                                    footer={
+                                        <div className="flex items-center justify-between gap-2">
+                                            <ProtocolBadge protocolType={target.protocol_type} />
+                                            <span className="text-[10px] text-noc-muted">
+                                                {relativeTime(target.last_checked_at) ?? 'Not yet checked'}
+                                            </span>
+                                        </div>
+                                    }
+                                >
+                                    <div className="mb-3 flex items-center justify-between gap-2">
+                                        <StatusBadge status={target.current_status} />
+                                        {target.config_payload?.sub_type != null ? (
+                                            <span className="tabular text-[10px] text-noc-muted">
+                                                {String(target.config_payload.sub_type)}
+                                            </span>
+                                        ) : null}
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <Metric
+                                            label="Latency"
+                                            value={metrics.last_latency_ms ?? target.state?.last_latency_ms ?? null}
+                                            unit=" ms"
+                                        />
+                                        <Metric
+                                            label="Packet loss"
+                                            value={metrics.packet_loss_pct ?? null}
+                                            unit="%"
+                                        />
+                                    </div>
+
+                                    <div className="mt-3 space-y-2">
+                                        <ProgressBar label="CPU" value={metrics.cpu_usage_pct ?? null} />
+                                        <ProgressBar label="Memory" value={metrics.mem_usage_pct ?? null} />
+                                    </div>
+                                </StatusCard>
+                            );
+                        })}
+                    </div>
+                )}
+            </section>
+
+            {/* Internet hosts: reachability, latency and packet loss */}
+            <section aria-labelledby="network-internet-heading">
+                <div className="mb-3 flex items-center gap-2">
+                    <h2 id="network-internet-heading" className="text-sm font-semibold text-noc-text">
+                        Internet
+                    </h2>
+                    <span className="tabular rounded-xs bg-white/5 px-2 py-0.5 text-[11px] text-noc-muted">
+                        {internet.length}
+                    </span>
+                </div>
+
+                {internet.length === 0 ? (
+                    <Card className="px-4 py-8 text-center">
+                        <p className="text-sm text-noc-muted">No Internet hosts registered yet.</p>
+                        <Link href="/targets" className="btn-primary mt-3">
+                            Open the Targets page
+                        </Link>
+                    </Card>
+                ) : (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                        {internet.map((target) => {
+                            const metrics = (target.state?.summary_metrics ?? {}) as Record<string, number>;
+
+                            return (
+                                <StatusCard
+                                    key={target.id}
+                                    status={target.current_status}
+                                    heartbeat={target.heartbeat}
+                                    header={
+                                        <>
+                                            <div className="flex items-center gap-2">
+                                                <p className="truncate text-sm font-medium text-noc-text">
+                                                    {target.name}
+                                                </p>
+                                            </div>
+                                            <p className="tabular mt-1 truncate text-xs text-noc-muted">
+                                                {target.host_or_endpoint}
+                                            </p>
+                                        </>
+                                    }
+                                    footer={
+                                        <div className="flex items-center justify-between gap-2">
+                                            <ProtocolBadge protocolType={target.protocol_type} />
+                                            <span className="text-[10px] text-noc-muted">
+                                                {relativeTime(target.last_checked_at) ?? 'Not yet checked'}
+                                            </span>
+                                        </div>
+                                    }
+                                >
+                                    <div className="mb-3 flex items-center justify-between gap-2">
+                                        <StatusBadge status={target.current_status} />
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <Metric
+                                            label="Latency"
+                                            value={target.state?.last_latency_ms ?? null}
+                                            unit=" ms"
+                                        />
+                                        <Metric
+                                            label="Packet loss"
+                                            value={metrics.packet_loss_pct ?? null}
+                                            unit="%"
+                                        />
+                                    </div>
+                                </StatusCard>
+                            );
+                        })}
+                    </div>
+                )}
+            </section>
         </AppLayout>
     );
 }

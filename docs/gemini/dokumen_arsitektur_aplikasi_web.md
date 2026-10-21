@@ -114,13 +114,13 @@ ProbeAdapterInterface
  ├── DomainSslProbeAdapter       (WHOIS Parser + OpenSSL X.509 Stream + DNS Lookup)
  ├── DatabasePingProbeAdapter    (TCP Handshake + Native PDO/Driver 'SELECT 1')
  ├── MailServerProbeAdapter      (SMTP/IMAP Socket Banner + DNSBL Reverse IP Check)
- ├── S3StorageProbeAdapter       (AWS S3 SDK v3 HeadBucket Request)
+ ├── S3BucketProbeAdapter        (AWS S3 SDK v3 HeadBucket + ListObjectsV2)
  └── BeszelApiProbeAdapter       (HTTP Client -> PocketBase REST API Token Auth)
 ```
 
 **Detail Integrasi Khusus Beszel API:**
 * Beszel menggunakan **PocketBase** sebagai *backend* di port `8090`.
-* `BeszelApiProbeAdapter` melakukan autentikasi ke `/api/collections/_superusers/auth-with-password` (atau token statis), menyimpan token JWT di Redis selama $12\text{ jam}$, lalu menarik data dari:
+* `BeszelApiProbeAdapter` melakukan autentikasi ke `/api/collections/users/auth-with-password` (akun Beszel regular, atau token statis tanpa login), menyimpan token JWT di Redis selama $12\text{ jam}$ (cache key per hub dan email), lalu menarik data dari:
   * `GET /api/collections/systems/records` (Status server, versi agen, *uptime*).
   * `GET /api/collections/system_stats/records?filter=(system='ID')&sort=-created&perPage=1` (CPU $\%$, Memori $\%$, Disk $\%$, Bandwidth, dan metrik kontainer Docker).
 
