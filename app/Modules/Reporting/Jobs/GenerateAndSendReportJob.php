@@ -101,44 +101,69 @@ class GenerateAndSendReportJob implements ShouldQueue
         }
 
         try {
-            $data = $this->buildReportData($schedule, $sla, $periodStart, $periodEnd);
-
-            // Nothing to report and the schedule only sends on issues
+            try {
+                $data = $this->buildReportData($schedule, $sla, $periodStart, $periodEnd);
+            } catch (\Throwable $e) {
+                throw new \RuntimeException('Report data build failed: '.$e->getMessage(), 0, $e);
+            }
             if ($schedule->send_only_on_issues && $data['summary']['total_incidents'] === 0) {
                 $report->update(['generation_status' => 'COMPLETED', 'summary_snapshot' => $data['summary']]);
-
                 return [
                     'outcome' => 'skipped',
                     'message' => 'No incidents in this period; the report was not sent.',
                     'report_id' => $report->id,
                 ];
             }
-
             $template = 'reports.'.strtolower($data['period_type']);
-
+            if (! \Illuminate\Support\Facades\View::exists($template)) {
+                throw new \RuntimeException("Report template missing: {$template}.");
+            }
             if (in_array('PDF', $schedule->report_formats, true)) {
-                $report->update(['pdf_file_path' => $pdf->build($data, $template)]);
+                try {
+                    $report->update(['pdf_file_path' => $pdf->build($data, $template)]);
+                } catch (\Throwable $e) {
+                    throw new \RuntimeException('PDF build failed: '.$e->getMessage(), 0, $e);
+                }
             }
-
             if (in_array('XLSX', $schedule->report_formats, true)) {
-                $report->update(['excel_file_path' => $excel->build($data)]);
+                try {
+                    $report->update(['excel_file_path' => $excel->build($data)]);
+                } catch (\Throwable $e) {
+                    throw new \RuntimeException('Excel build failed: '.$e->getMessage(), 0, $e);
+                }
             }
-
             $report->update([
                 'generation_status' => 'COMPLETED',
                 'summary_snapshot' => $data['summary'],
             ]);
-
-            $this->sendEmails($schedule, $report, $data);
-
+            try {
+                $delivery = $this->sendEmails($schedule, $report, $data);
+            } catch (\Throwable $e) {
+                throw new \RuntimeException('Email delivery step failed: '.$e->getMessage(), 0, $e);
+            }
+            if (($delivery['sent'] ?? 0) === 0 && ($delivery['total'] ?? 0) === 0) {
+                return [
+                    'outcome' => 'created',
+                    'message' => 'Report created, no recipients configured (not sent).',
+                    'report_id' => $report->id,
+                    'sent' => 0,
+                    'failed' => 0,
+                ];
+            }
+            $sent = (int) ($delivery['sent'] ?? 0);
+            $failed = (int) ($delivery['failed'] ?? 0);
             return [
                 'outcome' => 'created',
-                'message' => 'Report created.',
+                'message' => $failed > 0
+                    ? "Report created. Email: {$sent} sent, {$failed} failed."
+                    : 'Report created.',
                 'report_id' => $report->id,
+                'sent' => $sent,
+                'failed' => $failed,
             ];
         } catch (\Throwable $e) {
             $report->update(['generation_status' => 'FAILED']);
-
+            report($e);
             throw $e;
         }
     }
@@ -224,10 +249,11 @@ class GenerateAndSendReportJob implements ShouldQueue
     /**
      * @param  array<string, mixed>  $data
      */
-    private function sendEmails(ReportSchedule $schedule, GeneratedReport $report, array $data): void
+    private function sendEmails(ReportSchedule $schedule, GeneratedReport $report, array $data): array
     {
         $recipients = array_merge($schedule->recipients_to ?? [], $schedule->recipients_cc ?? []);
-
+        $sent = 0;
+        $failed = 0;
         foreach ($recipients as $email) {
             $log = EmailDeliveryLog::create([
                 'email_category' => 'SCHEDULED_REPORT',
@@ -236,7 +262,6 @@ class GenerateAndSendReportJob implements ShouldQueue
                 'subject' => "[Opslira] {$data['period_type']} report, {$schedule->name}",
                 'delivery_status' => 'PENDING',
             ]);
-
             try {
                 Mail::raw(
                     "Report {$data['period_label']}\nGlobal SLA: {$data['summary']['global_sla']}%\nIncidents: {$data['summary']['total_incidents']}",
@@ -244,15 +269,17 @@ class GenerateAndSendReportJob implements ShouldQueue
                         $message->to($email)->subject("[Opslira] {$data['period_type']} report, {$schedule->name}");
                     },
                 );
-
                 $log->update(['delivery_status' => 'SENT', 'sent_at' => now()]);
+                $sent++;
             } catch (\Throwable $e) {
                 $log->update([
                     'delivery_status' => 'FAILED',
                     'retry_count' => 1,
                     'smtp_response_or_error' => $e->getMessage(),
                 ]);
+                $failed++;
             }
         }
+        return ['sent' => $sent, 'failed' => $failed, 'total' => count($recipients)];
     }
 }

@@ -80,7 +80,7 @@ export default function AppLayout({ children, title }: { children: ReactNode; ti
                             <div className="text-right">
                                 <p className="text-xs font-medium text-noc-text">{user.name}</p>
                                 <p className="text-[10px] uppercase tracking-wide text-noc-muted">
-                                    {user.role.replace(/_/g, ' ')}
+                                    {(user.role ?? '').replace(/_/g, ' ') || '-'}
                                 </p>
                             </div>
                         ) : null}

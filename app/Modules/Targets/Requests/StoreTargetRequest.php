@@ -76,16 +76,20 @@ class StoreTargetRequest extends FormRequest
         $validator->after(function (Validator $validator) {
             $authType = $this->authType();
             $payload = (array) $this->input('credentials.payload', []);
-
             if ($authType === 'BESZEL') {
                 $hasToken = ! empty($payload['api_token']);
                 $hasLogin = ! empty($payload['email']) && ! empty($payload['password']);
-
                 if (! $hasToken && ! $hasLogin || $hasToken && $hasLogin) {
                     $validator->errors()->add(
                         'credentials.payload',
                         'Beszel credentials require either an API token or both email and password.'
                     );
+                }
+            }
+            if (($this->input('target_type') === 'BESZEL_SERVER')) {
+                $hubUrl = (string) ($this->input('config_payload.hub_url') ?? $this->input('config_payload.host') ?? '');
+                if ($hubUrl !== '' && ! str_starts_with($hubUrl, 'http://') && ! str_starts_with($hubUrl, 'https://')) {
+                    $validator->errors()->add('config_payload.hub_url', 'Beszel hub URL must start with http:// or https://.');
                 }
             }
 

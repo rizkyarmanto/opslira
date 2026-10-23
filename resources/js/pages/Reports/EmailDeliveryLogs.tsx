@@ -97,7 +97,7 @@ export default function EmailDeliveryLogs({ logs, reports }: Props) {
 
                 {logs.length === 0 ? (
                     <p className="rounded-md border border-dashed border-noc-border px-4 py-8 text-center text-xs text-noc-muted">
-                        No emails sent yet. Rows appear after a report or incident notification is delivered.
+                        No emails sent yet. Rows appear after a report or incident notification is delivered. Check MAIL settings and ALERT_RECIPIENTS.
                     </p>
                 ) : (
                     <div className="overflow-x-auto rounded-md border border-noc-border">

@@ -85,12 +85,17 @@ export default function ScheduleManager({ schedules }: Props) {
         setRunning(schedule.id);
         setNotice(null);
         try {
-            const { data } = await api.post<{ ok: boolean; outcome: string; message: string }>(
-                `/reports/schedules/${schedule.id}/run-now`,
-            );
+            const { data } = await api.post<{
+                ok: boolean;
+                outcome: string;
+                message: string;
+                sent?: number | null;
+                failed?: number | null;
+            }>(`/reports/schedules/${schedule.id}/run-now`);
+            const failed = data.failed ?? 0;
             setNotice({
-                tone: data.outcome === 'created' ? 'ok' : 'info',
-                text: data.outcome === 'created' ? `Report "${schedule.name}" was created and sent.` : data.message,
+                tone: !data.ok ? 'error' : data.outcome !== 'created' || failed > 0 ? 'info' : 'ok',
+                text: data.message,
             });
             reloadSchedules();
         } catch (error) {

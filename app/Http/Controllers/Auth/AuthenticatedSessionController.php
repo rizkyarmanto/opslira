@@ -27,7 +27,7 @@ class AuthenticatedSessionController
 
         $request->session()->regenerate();
 
-        return redirect()->intended(route('dashboard.noc'));
+        return redirect()->intended(route('dashboard.noc'), 303);
     }
 
     public function destroy(Request $request)

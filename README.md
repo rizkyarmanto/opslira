@@ -106,7 +106,7 @@ cp .env.example .env
 php artisan key:generate
 
 php artisan migrate --force
-php artisan db:seed --force
+ADMIN_EMAIL=admin@kantor.co.id ADMIN_NAME="Opslira Super Admin" ADMIN_PASSWORD=<rahasia-kuat> php artisan db:seed --class=Database\Seeders\ProductionSeeder --force
 php artisan storage:link   # bila perlu; laporan disimpan di storage/app/reports
 ```
 
@@ -210,13 +210,13 @@ cp .env.example .env
 
 docker compose up -d --build
 docker compose exec monitoring-web php artisan migrate --force
-docker compose exec monitoring-web php artisan db:seed --force
+docker compose exec -e ADMIN_EMAIL=admin@kantor.co.id -e ADMIN_NAME="Opslira Super Admin" -e ADMIN_PASSWORD=<rahasia-kuat> monitoring-web php artisan db:seed --class=Database\Seeders\ProductionSeeder --force
 ```
 
 `OPSLIRA_RUNNER_TOKEN` pada `.env` harus sama dengan nilai yang dipakai service
 `monitoring-runner` agar endpoint internal menerima panggilan runner.
 
-Buka <http://localhost:8080> dan masuk dengan `admin@opslira.local` / `ChangeMe!2026`.
+Buka <http://localhost:8080> dan masuk dengan `ADMIN_EMAIL` dan `ADMIN_PASSWORD` yang dipakai saat seeding.
 
 ## Varian ringan: docker-compose.lite.yml
 

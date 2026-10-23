@@ -18,29 +18,34 @@ class PdfReportBuilder
      */
     public function build(array $data, string $template = 'reports.daily'): string
     {
-        $html = View::make($template, $data)->render();
-
-        $gotenbergUrl = rtrim((string) config('services.gotenberg.url'), '/');
-
-        $response = Http::timeout(120)
-            ->attach('files', $html, 'index.html')
-            ->post("{$gotenbergUrl}/forms/chromium/convert/html", [
-                'marginTop' => '0.59',
-                'marginBottom' => '0.59',
-                'marginLeft' => '0.59',
-                'marginRight' => '0.59',
-                'printBackground' => 'true',
-            ]);
-
-        if ($response->failed()) {
-            throw new \RuntimeException('Gotenberg PDF generation failed: HTTP '.$response->status());
+        try {
+            $html = View::make($template, $data)->render();
+        } catch (\Throwable $e) {
+            throw new \RuntimeException("PDF template render failed for template {$template}: ".$e->getMessage(), 0, $e);
         }
-
+        $gotenbergUrl = rtrim((string) config('services.gotenberg.url'), '/');
+        try {
+            $response = Http::timeout(120)
+                ->attach('files', $html, 'index.html')
+                ->post("{$gotenbergUrl}/forms/chromium/convert/html", [
+                    'marginTop' => '0.59',
+                    'marginBottom' => '0.59',
+                    'marginLeft' => '0.59',
+                    'marginRight' => '0.59',
+                    'printBackground' => 'true',
+                ]);
+        } catch (\Throwable $e) {
+            throw new \RuntimeException("Gotenberg at {$gotenbergUrl} unreachable: ".$e->getMessage(), 0, $e);
+        }
+        if ($response->failed()) {
+            throw new \RuntimeException("PDF build failed (Gotenberg at {$gotenbergUrl}): HTTP ".$response->status());
+        }
         $directory = 'reports/'.now()->format('Y-m');
         $filename = sprintf('%s-%s.pdf', $data['period_type'] ?? 'report', now()->format('Ymd-His'));
-
-        \Storage::disk('reports')->put("{$directory}/{$filename}", $response->body());
-
+        $stored = \Storage::disk('reports')->put("{$directory}/{$filename}", $response->body());
+        if (! $stored) {
+            throw new \RuntimeException('PDF storage failed on disk reports.');
+        }
         return "{$directory}/{$filename}";
     }
 }

@@ -55,6 +55,14 @@ services:
       QUEUE_CONNECTION: sync
       GOTENBERG_URL: http://monitoring-gotenberg:3000
       OPSLIRA_RUNNER_TOKEN: ${OPSLIRA_RUNNER_TOKEN:-}
+      # Leave false while monitoring-runner is alive, or every job runs twice.
+      RUN_ARTISAN_WORKERS: ${RUN_ARTISAN_WORKERS:-false}
+      RUN_ARTISAN_QUEUE: ${RUN_ARTISAN_QUEUE:-false}
+      ARTISAN_QUEUE_NAMES: ${ARTISAN_QUEUE_NAMES:-alerts,probes,reports}
+      ARTISAN_PROBE_SECONDS: ${ARTISAN_PROBE_SECONDS:-60}
+      ARTISAN_REPORT_SECONDS: ${ARTISAN_REPORT_SECONDS:-60}
+      ARTISAN_ROLLUP_SECONDS: ${ARTISAN_ROLLUP_SECONDS:-3600}
+      ARTISAN_PRUNE_SECONDS: ${ARTISAN_PRUNE_SECONDS:-86400}
     volumes:
       - report_storage:/var/www/html/storage/app/reports
       - lite_cache:/var/www/html/storage/framework/cache

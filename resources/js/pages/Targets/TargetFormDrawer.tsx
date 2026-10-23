@@ -12,7 +12,7 @@ import {
     targetFormSchema,
     type TargetFormValues,
 } from '@/lib/schemas/target';
-import type { ProbeResult, TargetType } from '@/types/monitoring';
+import type { MonitoringTarget, ProbeResult, TargetType } from '@/types/monitoring';
 
 const targetTypes: Array<{ value: TargetType; label: string }> = [
     { value: 'NETWORK_DEVICE', label: 'Network device (ICMP + SNMP)' },
@@ -65,16 +65,19 @@ export default function TargetFormDrawer({
     open,
     onClose,
     onSaved,
+    editing = null,
+    hasCredentials = false,
 }: {
     open: boolean;
     onClose: () => void;
     onSaved: () => void;
+    editing?: MonitoringTarget | null;
+    hasCredentials?: boolean;
 }) {
     const [testResult, setTestResult] = useState<ProbeResult | null>(null);
     const [testing, setTesting] = useState(false);
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
-
     const {
         register,
         handleSubmit,
@@ -97,6 +100,41 @@ export default function TargetFormDrawer({
             credentials: { auth_type: 'NONE', payload: {} },
         },
     });
+    useEffect(() => {
+        if (!open) return;
+        if (editing) {
+            reset({
+                name: editing.name,
+                dashboard_group: editing.dashboard_group,
+                target_type: editing.target_type,
+                environment: editing.environment,
+                host_or_endpoint: editing.host_or_endpoint,
+                port: editing.port,
+                protocol_type: editing.protocol_type,
+                check_interval_seconds: editing.check_interval_seconds,
+                timeout_seconds: editing.timeout_seconds,
+                retry_threshold: editing.retry_threshold,
+                degraded_threshold_ms: editing.degraded_threshold_ms,
+                config_payload: editing.config_payload ?? {},
+                credentials: { auth_type: 'NONE', payload: {} },
+            });
+        } else {
+            reset({
+                target_type: 'NETWORK_DEVICE',
+                dashboard_group: 'NETWORK',
+                environment: 'PRODUCTION',
+                protocol_type: 'ICMP_SNMP',
+                check_interval_seconds: 60,
+                timeout_seconds: 5,
+                retry_threshold: 3,
+                degraded_threshold_ms: 1000,
+                config_payload: {},
+                credentials: { auth_type: 'NONE', payload: {} },
+            });
+        }
+        setTestResult(null);
+        setSaveError(null);
+    }, [open, editing, reset]);
 
     const targetType = watch('target_type');
 
@@ -104,11 +142,22 @@ export default function TargetFormDrawer({
         setSaving(true);
         setSaveError(null);
         try {
-            await api.post('/targets', {
+            const payload = {
                 ...values,
                 dashboard_group: dashboardGroupByTargetType[values.target_type],
                 protocol_type: protocolByTargetType[values.target_type],
-            });
+            };
+            if (editing) {
+                const { credentials: _credentials, ...noCredentials } = payload;
+                const credentialsUntouched = values.credentials.auth_type === 'NONE';
+                if (credentialsUntouched) {
+                    await api.put(`/targets/${editing.id}`, noCredentials);
+                } else {
+                    await api.put(`/targets/${editing.id}`, payload);
+                }
+            } else {
+                await api.post('/targets', payload);
+            }
             reset();
             onSaved();
             onClose();
@@ -149,8 +198,8 @@ export default function TargetFormDrawer({
         <SlideOverDrawer
             open={open}
             onClose={onClose}
-            title="Add target"
-            description="Fill in the endpoint and how it is checked. Test the connection before saving."
+            title={editing ? 'Edit target' : 'Add target'}
+            description={editing ? 'Update the endpoint and check settings.' : 'Fill in the endpoint and how it is checked. Test the connection before saving.'}
             footer={
                 <div className="flex items-center justify-between gap-3">
                     <Button variant="ghost" loading={testing} onClick={onTestConnection}>
@@ -209,7 +258,7 @@ export default function TargetFormDrawer({
                 <TransitionPanel panelKey={targetType}>
                     <div className="space-y-3">
                         <DynamicFields targetType={targetType} register={register} errors={errors} />
-                        <CredentialsSection targetType={targetType} register={register} setValue={setValue} watch={watch} />
+                        <CredentialsSection targetType={targetType} register={register} setValue={setValue} watch={watch} hasCredentials={hasCredentials} />
                     </div>
                 </TransitionPanel>
 
@@ -546,11 +595,13 @@ function CredentialsSection({
     register,
     setValue,
     watch,
+    hasCredentials,
 }: {
     targetType: TargetType;
     register: UseFormRegister<TargetFormValues>;
     setValue: UseFormSetValue<TargetFormValues>;
     watch: UseFormWatch<TargetFormValues>;
+    hasCredentials?: boolean;
 }) {
     const [choice, setChoice] = useState<CredentialChoice>('NONE');
     const options = credentialOptionsByType[targetType];
@@ -587,6 +638,9 @@ function CredentialsSection({
     return (
         <div className="space-y-3 rounded-sm border border-noc-border bg-white/[0.02] p-4">
             <p className="field-label">Credentials</p>
+            {hasCredentials ? (
+                <p className="text-xs text-noc-muted">Stored credential on file. Leave blank to keep stored credential.</p>
+            ) : null}
             <div>
                 <label htmlFor="cred-auth-type" className="field-label mb-1.5 block">
                     Login method

@@ -141,12 +141,33 @@ class TargetController
 
     public function update(UpdateTargetRequest $request, MonitoringTarget $target): JsonResponse
     {
+        $oldHub = (string) ($target->config_payload['hub_url'] ?? '');
+        $oldCreds = [];
+        if ($credential = $target->credentials) {
+            $oldCreds = $this->encryption->decrypt(
+                $credential->encrypted_payload,
+                $credential->encryption_iv,
+                $credential->encryption_tag,
+            );
+        }
+        $oldEmail = (string) ($oldCreds['email'] ?? '');
         $data = $this->normalizeTargetPayload($request->validated());
         unset($data['credentials']);
-
         $target->update($data);
-        $this->persistCredentials($target, $request->input('credentials'));
-
+        if (array_key_exists('credentials', $request->all())) {
+            $this->persistCredentials($target, $request->input('credentials'));
+        }
+        if ($target->target_type === 'BESZEL_SERVER') {
+            $newHub = (string) ($target->config_payload['hub_url'] ?? '');
+            $newCreds = $request->input('credentials.payload', []);
+            $newEmail = (string) ($newCreds['email'] ?? $oldEmail);
+            if ($oldHub !== '' && $oldEmail !== '') {
+                \App\Modules\Probes\Adapters\BeszelApiProbeAdapter::forgetToken($oldHub, $oldEmail);
+            }
+            if ($newHub !== '' && $newEmail !== '' && ($newHub !== $oldHub || is_array($newCreds))) {
+                \App\Modules\Probes\Adapters\BeszelApiProbeAdapter::forgetToken($newHub, $newEmail);
+            }
+        }
         return response()->json(['target' => $target->fresh()]);
     }
 

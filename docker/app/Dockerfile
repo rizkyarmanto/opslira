@@ -63,5 +63,14 @@ COPY docker/app/default.conf /etc/nginx/http.d/default.conf
 COPY docker/app/supervisord.conf /etc/supervisord.conf
 COPY docker/app/php-fpm.conf /usr/local/etc/php-fpm.d/zz-opslira.conf
 
+# Optional artisan worker programs. The entrypoint renders the template into
+# /etc/supervisor/conf.d only when RUN_ARTISAN_WORKERS=true; otherwise the
+# container runs nginx + php-fpm alone and leaves periodic work to the runner.
+COPY docker/app/supervisor-artisan.conf.tpl /etc/opslira/supervisor-artisan.conf.tpl
+COPY docker/app/entrypoint.sh /usr/local/bin/opslira-entrypoint
+RUN chmod +x /usr/local/bin/opslira-entrypoint \
+    && mkdir -p /etc/supervisor/conf.d
+
 EXPOSE 80 9000
+ENTRYPOINT ["/usr/local/bin/opslira-entrypoint"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]

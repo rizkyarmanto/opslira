@@ -42,9 +42,12 @@ class ReportController
             'cron_expression' => $this->cronRules(),
             'timezone' => ['string', 'max:50'],
             'recipients_to' => ['array'],
+            'recipients_to.*' => ['email'],
             'recipients_cc' => ['array'],
+            'recipients_cc.*' => ['email'],
             'send_only_on_issues' => ['boolean'],
-            'report_formats' => ['array'],
+            'report_formats' => ['required', 'array', 'min:1'],
+            'report_formats.*' => ['in:PDF,XLSX,HTML'],
         ]);
 
         $schedule = ReportSchedule::create([
@@ -69,9 +72,12 @@ class ReportController
             'cron_expression' => ['sometimes', ...$this->cronRules()],
             'timezone' => ['sometimes', 'string', 'max:50'],
             'recipients_to' => ['sometimes', 'array'],
+            'recipients_to.*' => ['email'],
             'recipients_cc' => ['sometimes', 'array'],
+            'recipients_cc.*' => ['email'],
             'send_only_on_issues' => ['sometimes', 'boolean'],
-            'report_formats' => ['sometimes', 'array'],
+            'report_formats' => ['sometimes', 'array', 'min:1'],
+            'report_formats.*' => ['in:PDF,XLSX,HTML'],
             'is_active' => ['sometimes', 'boolean'],
         ]);
 
@@ -133,20 +139,23 @@ class ReportController
     public function runNow(ReportSchedule $schedule): JsonResponse
     {
         try {
-            $result = GenerateAndSendReportJob::dispatchSync($schedule->id);
+            $result = app()->call([new GenerateAndSendReportJob($schedule->id), 'handle']);
         } catch (\Throwable $e) {
-            report($e);
-
+            \Illuminate\Support\Facades\Log::error('Report run-now failed', [
+                'schedule_id' => $schedule->id,
+                'error' => $e->getMessage(),
+            ]);
             return response()->json([
                 'ok' => false,
                 'message' => 'Report generation failed: '.$e->getMessage(),
             ], 502);
         }
-
         return response()->json([
             'ok' => $result['outcome'] !== 'failed',
             'outcome' => $result['outcome'],
             'message' => $result['message'],
+            'sent' => $result['sent'] ?? null,
+            'failed' => $result['failed'] ?? null,
         ]);
     }
 

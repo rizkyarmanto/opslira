@@ -20,7 +20,9 @@ class AlertNotificationService
         $body = $this->buildBody($target, $event);
 
         $recipients = $this->recipients();
-
+        if (count($recipients) === 0) {
+            Log::warning('No alert recipients configured, skipping incident email');
+        }
         foreach ($recipients as $email) {
             $log = EmailDeliveryLog::create([
                 'email_category' => 'INCIDENT_ALERT',

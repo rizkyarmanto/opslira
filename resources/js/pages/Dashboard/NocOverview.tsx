@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Head, Link } from '@inertiajs/react';
+import { useEffect, useState } from 'react';
+import { Head, Link, router } from '@inertiajs/react';
 import ReactECharts from 'echarts-for-react';
 import { AlertTriangle, ArrowRight, CheckCircle2, Inbox, XOctagon } from 'lucide-react';
 import AppLayout from '@/components/shared/AppLayout';
@@ -9,7 +9,6 @@ import ReloadIndicator from '@/components/beautiful-ui/ReloadIndicator';
 import StatusBadge, { StatusRail } from '@/components/shared/StatusBadge';
 import SlidingNumber from '@/components/motion-primitives/SlidingNumber';
 import { relativeTime } from '@/lib/time';
-import { usePolling } from '@/lib/usePolling';
 import type {
     Incident,
     MonitoringTarget,
@@ -71,29 +70,85 @@ export default function NocOverview({
     targetDailySla,
     slaDate,
 }: Props) {
-    const { lastUpdated, refreshing } = usePolling([
-        'summary',
-        'targets',
-        'incidents',
-        'globalSla',
-        'slaTrend',
-        'targetDailySla',
-    ]);
-
+    const [liveTargets, setLiveTargets] = useState(targets);
+    const [lastUpdated, setLastUpdated] = useState<Date | null>(() => new Date());
+    const [refreshing, setRefreshing] = useState(false);
+    useEffect(() => {
+        let timer: number | undefined;
+        const tick = async () => {
+            try {
+                const res = await fetch('/api/v1/dashboard/states', {
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                if (!res.ok) return;
+                const body = (await res.json()) as {
+                    statuses?: Record<string, { current_status: TargetStatus; last_checked_at: string | null }>;
+                };
+                const statuses = body.statuses ?? {};
+                setLiveTargets((prev) =>
+                    prev.map((t) =>
+                        statuses[t.id]
+                            ? {
+                                  ...t,
+                                  current_status: statuses[t.id].current_status,
+                                  last_checked_at: statuses[t.id].last_checked_at,
+                              }
+                            : t,
+                    ),
+                );
+                setLastUpdated(new Date());
+            } catch {
+                // Keep last known statuses; next tick retries.
+            }
+        };
+        const fullReload = () => {
+            setRefreshing(true);
+            router.reload({
+                only: ['summary', 'targets', 'incidents', 'globalSla', 'slaTrend', 'targetDailySla'],
+                onFinish: () => {
+                    setRefreshing(false);
+                    setLastUpdated(new Date());
+                },
+            });
+        };
+        const start = () => {
+            window.clearInterval(timer);
+            timer = window.setInterval(tick, 15_000);
+        };
+        const stop = () => window.clearInterval(timer);
+        const onVisibility = () => {
+            if (document.hidden) {
+                stop();
+            } else {
+                void tick();
+                start();
+            }
+        };
+        start();
+        const fullTimer = window.setInterval(fullReload, 60_000);
+        document.addEventListener('visibilitychange', onVisibility);
+        return () => {
+            stop();
+            window.clearInterval(fullTimer);
+            document.removeEventListener('visibilitychange', onVisibility);
+        };
+    }, []);
+    useEffect(() => {
+        setLiveTargets(targets);
+    }, [targets]);
     const [showAllTargets, setShowAllTargets] = useState(false);
     const [chartTab, setChartTab] = useState<ChartTab>('uptime');
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
-
-    const needsAttention = targets.filter(
-        (t) => t.current_status === 'DOWN' || t.current_status === 'DEGRADED',
-    );
-
+    const liveStatusById = new Map(liveTargets.map((t) => [t.id, t]));
+    const orderedIncidents = [...incidents].sort((a, b) => {
+        const bySeverity = (a.severity === 'CRITICAL' ? 0 : 1) - (b.severity === 'CRITICAL' ? 0 : 1);
+        if (bySeverity !== 0) return bySeverity;
+        return b.started_at.localeCompare(a.started_at);
+    });
+    const incidentTotal = orderedIncidents.length;
     const slaPoints = slaTrend ?? [];
     const dailySla = targetDailySla ?? [];
     const hasSlaTrend = slaPoints.length > 0;
-
-    // A tab only renders for a series the backend actually returned, and an
-    // unavailable tab falls back to the first one that does have data.
     const chartTabs = [
         { key: 'uptime' as ChartTab, label: 'Uptime %', available: hasSlaTrend },
         { key: 'latency' as ChartTab, label: 'Latency ms', available: hasSlaTrend },
@@ -101,16 +156,9 @@ export default function NocOverview({
     const activeTab: ChartTab = chartTabs.some((tab) => tab.key === chartTab)
         ? chartTab
         : (chartTabs[0]?.key ?? 'uptime');
-
-    // A chart click drills the lists below to one calendar day. The slice keeps
-    // the same Y-m-d grouping the backend uses for its daily rows.
-    const visibleAttention = selectedDate
-        ? needsAttention.filter((t) => t.last_checked_at?.slice(0, 10) === selectedDate)
-        : needsAttention;
     const visibleIncidents = selectedDate
-        ? incidents.filter((i) => i.started_at.slice(0, 10) === selectedDate)
-        : incidents;
-
+        ? orderedIncidents.filter((i) => i.started_at.slice(0, 10) === selectedDate)
+        : orderedIncidents.slice(0, 5);
     return (
         <AppLayout title="NOC Overview">
             <Head title="NOC Overview" />
@@ -125,7 +173,7 @@ export default function NocOverview({
                         'Loading latest status...'
                     )}
                 </p>
-                <p className="text-xs text-noc-muted">Refreshes every 15 seconds while the tab is active.</p>
+                <p className="text-xs text-noc-muted">Status badges refresh every 15 seconds. Full data refreshes every 60 seconds.</p>
             </div>
 
             {/* Executive strip: the four verdict numbers in one row. Needs attention
@@ -179,7 +227,7 @@ export default function NocOverview({
                         <div className="flex items-center gap-1.5">
                             <CheckCircle2 size={13} className="text-status-up" aria-hidden />
                             <span className="field-label">
-                                SLA {slaWindowDays ? `last ${slaWindowDays} days` : ''}
+                                SLA {slaWindowDays ? `last ${slaWindowDays} days` : ''} (incl. today)
                             </span>
                         </div>
                         {globalSla === null ? (
@@ -206,8 +254,8 @@ export default function NocOverview({
                         <>
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                                 <h2 className="text-sm font-semibold text-noc-text">
-                                    {activeTab === 'uptime' && 'Uptime trend, last 30 days'}
-                                    {activeTab === 'latency' && 'Latency trend, last 30 days'}
+                                    {activeTab === 'uptime' && 'Uptime trend, last 30 days (today live)'}
+                                    {activeTab === 'latency' && 'Latency trend, last 30 days (today live)'}
                                 </h2>
                                 <div className="flex items-center gap-1">
                                     {chartTabs.map((tab) => (
@@ -251,12 +299,12 @@ export default function NocOverview({
                 likely to need attention reads first (C-3). The bar fill names the
                 target's real status, never a threshold invented here. */}
             <section className="mb-8" aria-labelledby="system-sla-heading">
-                <div className="mb-3 flex items-center gap-2">
+                <div className="mb-3 flex flex-wrap items-baseline gap-2">
                     <h2 id="system-sla-heading" className="text-sm font-semibold text-noc-text">
-                        {slaDate ? `System SLA by target, ${slaDate}` : 'System SLA by target'}
+                        {slaDate ? `System SLA by target (daily rollup), ${slaDate}` : 'System SLA by target (daily rollup)'}
                     </h2>
+                    <span className="text-xs text-noc-muted">Status badges update every 15 seconds. Percentages update daily.</span>
                 </div>
-
                 {dailySla.length === 0 ? (
                     <Card className="px-4 py-6">
                         <p className="text-sm text-noc-muted">
@@ -303,15 +351,20 @@ export default function NocOverview({
                 <div className="mb-3 flex items-center gap-2">
                     <AlertTriangle
                         size={16}
-                        className={visibleAttention.length > 0 ? 'text-status-down' : 'text-noc-muted'}
+                        className={visibleIncidents.length > 0 ? 'text-status-down' : 'text-noc-muted'}
                         aria-hidden
                     />
                     <h2 id="attention-heading" className="text-sm font-semibold text-noc-text">
                         Needs attention
                     </h2>
                     <span className="tabular rounded-xs bg-white/5 px-2 py-0.5 text-[11px] text-noc-muted">
-                        {visibleAttention.length}
+                        {visibleIncidents.length}
                     </span>
+                    {!selectedDate && incidentTotal > 5 && (
+                        <span className="tabular rounded-xs bg-white/5 px-2 py-0.5 text-[11px] text-noc-muted">
+                            Showing 5 of {incidentTotal}
+                        </span>
+                    )}
                     {selectedDate && (
                         <span className="tabular rounded-xs bg-white/5 px-2 py-0.5 text-[11px] text-noc-muted">
                             Showing {selectedDate}
@@ -328,76 +381,60 @@ export default function NocOverview({
                     )}
                 </div>
 
-                {visibleAttention.length === 0 && visibleIncidents.length === 0 ? (
+                {visibleIncidents.length === 0 ? (
                     <Card className="flex items-center gap-3 px-4 py-4">
                         <Inbox size={16} className="text-noc-muted" aria-hidden />
-                        <p className="text-sm text-noc-muted">
-                            No DOWN or DEGRADED targets, and no open incidents.
-                        </p>
+                        <p className="text-sm text-noc-muted">No open incidents.</p>
                     </Card>
                 ) : (
                     <div className="space-y-2">
-                        {visibleAttention.map((target) => (
-                            <Link
-                                key={target.id}
-                                href={`/targets/${target.id}`}
-                                className="group relative flex items-center gap-4 overflow-hidden rounded-md border border-noc-border bg-noc-surface px-4 py-3 pl-5 hover:border-zinc-600"
-                            >
-                                <StatusRail status={target.current_status} />
-                                <StatusBadge status={target.current_status} />
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm font-medium text-noc-text">{target.name}</p>
-                                    <p className="tabular truncate text-xs text-noc-muted">
-                                        {target.host_or_endpoint}
-                                        {target.port ? `:${target.port}` : ''}
-                                    </p>
-                                </div>
-                                <span className="tabular hidden text-xs text-noc-muted sm:block">
-                                    {relativeTime(target.last_checked_at) ?? 'Not yet checked'}
-                                </span>
-                                <ArrowRight
-                                    size={15}
-                                    className="shrink-0 text-noc-muted group-hover:text-noc-text"
-                                    aria-hidden
-                                />
-                            </Link>
-                        ))}
-
-                        {visibleIncidents.map((incident) => (
-                            <div
-                                key={incident.id}
-                                className="relative flex items-start gap-4 overflow-hidden rounded-md border border-noc-border bg-noc-surface px-4 py-3 pl-5"
-                            >
-                                <span
-                                    aria-hidden
-                                    className={`absolute inset-y-0 left-0 w-[3px] ${
-                                        incident.severity === 'CRITICAL' ? 'bg-status-down' : 'bg-status-degraded'
-                                    }`}
-                                />
-                                <span
-                                    className={`mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                                        incident.severity === 'CRITICAL'
-                                            ? 'status-down'
-                                            : 'status-degraded'
-                                    }`}
+                        {visibleIncidents.map((incident) => {
+                            const liveTarget = liveStatusById.get(incident.target_id);
+                            const cardStatus =
+                                liveTarget?.current_status ??
+                                (incident.severity === 'CRITICAL' ? 'DOWN' : 'DEGRADED');
+                            return (
+                                <Link
+                                    key={incident.id}
+                                    href={`/targets/${incident.target_id}`}
+                                    className="group relative flex items-center gap-4 overflow-hidden rounded-md border border-noc-border bg-noc-surface px-4 py-3 pl-5 hover:border-zinc-600"
                                 >
-                                    {incident.severity === 'CRITICAL' ? 'CRITICAL' : 'WARNING'}
-                                </span>
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm font-medium text-noc-text">
-                                        {incident.target_name ?? 'Unknown target'}
-                                    </p>
-                                    <p className="text-xs text-noc-muted">{incident.root_cause_message}</p>
-                                </div>
-                                <span className="tabular hidden shrink-0 text-xs text-noc-muted sm:block">
-                                    {relativeTime(incident.started_at) ?? ''}
-                                </span>
-                            </div>
-                        ))}
+                                    <StatusRail status={cardStatus} />
+                                    <span
+                                        className={`mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                            incident.severity === 'CRITICAL'
+                                                ? 'status-down'
+                                                : 'status-degraded'
+                                        }`}
+                                    >
+                                        {incident.severity === 'CRITICAL' ? 'CRITICAL' : 'WARNING'}
+                                    </span>
+                                    <StatusBadge status={cardStatus} />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate text-sm font-medium text-noc-text">
+                                            {incident.target_name ?? liveTarget?.name ?? 'Unknown target'}
+                                        </p>
+                                        <p className="text-xs text-noc-muted">{incident.root_cause_message}</p>
+                                    </div>
+                                    <span className="tabular hidden shrink-0 text-xs text-noc-muted sm:block">
+                                        {relativeTime(incident.started_at) ?? ''}
+                                    </span>
+                                    <ArrowRight
+                                        size={15}
+                                        className="shrink-0 text-noc-muted group-hover:text-noc-text"
+                                        aria-hidden
+                                    />
+                                </Link>
+                            );
+                        })}
                     </div>
                 )}
+                <div className="mt-3">
+                    <Link href="/dashboard/alerts" className="text-xs text-noc-accent hover:underline">
+                        View all alerts
+                    </Link>
+                </div>
             </section>
-
             {/* Full inventory */}
             <section aria-labelledby="all-targets-heading">
                 <div className="mb-3 flex items-center gap-2">

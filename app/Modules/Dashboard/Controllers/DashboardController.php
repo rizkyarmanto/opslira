@@ -4,15 +4,17 @@ namespace App\Modules\Dashboard\Controllers;
 
 use App\Modules\Incidents\Models\Incident;
 use App\Modules\Probes\Services\TargetStateService;
+use App\Modules\Reporting\Services\SlaDashboardService;
 use App\Modules\Targets\Models\MonitoringTarget;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class DashboardController
 {
-    public function __construct(private readonly TargetStateService $state)
+    public function __construct(private readonly SlaDashboardService $sla, private readonly TargetStateService $state)
     {
     }
 
@@ -21,17 +23,16 @@ class DashboardController
      */
     public function noc(): Response
     {
-        $targets = MonitoringTarget::where('is_active', true)->get();
-
+        $targets = MonitoringTarget::where('is_active', true)->get(['id', 'name', 'dashboard_group', 'target_type', 'environment', 'host_or_endpoint', 'port', 'protocol_type', 'config_payload', 'current_status', 'is_maintenance', 'last_checked_at']);
         return Inertia::render('Dashboard/NocOverview', [
             'summary' => $this->buildSummary($targets),
             'targets' => $this->decorateTargets($targets),
             'incidents' => $this->activeIncidents(),
-            'globalSla' => $this->globalSla(),
-            'slaWindowDays' => 30,
-            'slaTrend' => $this->slaTrend(),
-            'targetDailySla' => $this->targetDailySla(),
-            'slaDate' => $this->latestSummaryDate(),
+            'globalSla' => Cache::remember('noc:sla:global', 60, fn () => $this->globalSla()),
+            'slaWindowDays' => now()->setTimezone('Asia/Jakarta')->daysInMonth,
+            'slaTrend' => Cache::remember('noc:sla:trend', 60, fn () => $this->slaTrend()),
+            'targetDailySla' => Cache::remember('noc:sla:target-daily', 60, fn () => $this->targetDailySla()),
+            'slaDate' => $this->latestLogDate(),
         ]);
     }
 
@@ -79,8 +80,8 @@ class DashboardController
             ->get();
 
         return Inertia::render('Dashboard/NetworkDashboard', [
-            'targets' => $this->decorateTargets($targets),
-            'internetTargets' => $this->decorateTargets($targets->where('target_type', 'INTERNET')->values()),
+            'targets' => $this->decorateTargets($targets, true),
+            'internetTargets' => $this->decorateTargets($targets->where('target_type', 'INTERNET')->values(), true),
             'trafficSummary' => $this->trafficSummary($targets),
         ]);
     }
@@ -109,9 +110,8 @@ class DashboardController
         }
 
         $targets = $query->get();
-
         return Inertia::render('Dashboard/AppDbDomainDashboard', [
-            'targets' => $this->decorateTargets($targets),
+            'targets' => $this->decorateTargets($targets, true),
             'environment' => $environment,
             'counts' => $counts,
         ]);
@@ -127,7 +127,7 @@ class DashboardController
             ->get();
 
         return Inertia::render('Dashboard/MailS3BeszelDashboard', [
-            'targets' => $this->decorateTargets($targets),
+            'targets' => $this->decorateTargets($targets, true),
         ]);
     }
 
@@ -137,13 +137,14 @@ class DashboardController
     public function states()
     {
         $targets = MonitoringTarget::where('is_active', true)
-            ->get(['id', 'name', 'current_status']);
-
-        $states = $targets->mapWithKeys(fn ($t) => [
-            $t->id => $this->state->get($t->id),
+            ->get(['id', 'current_status', 'last_checked_at']);
+        $statuses = $targets->mapWithKeys(fn ($t) => [
+            $t->id => [
+                'current_status' => $t->current_status,
+                'last_checked_at' => $t->last_checked_at?->toIso8601String(),
+            ],
         ]);
-
-        return response()->json(['states' => $states]);
+        return response()->json(['statuses' => $statuses]);
     }
 
     /**
@@ -166,12 +167,10 @@ class DashboardController
     /**
      * @param  \Illuminate\Support\Collection<int, MonitoringTarget>  $targets
      */
-    private function decorateTargets($targets): array
+    private function decorateTargets($targets, bool $withState = false): array
     {
-        return $targets->map(function (MonitoringTarget $target) {
-            $state = $this->state->get($target->id);
-
-            return [
+        return $targets->map(function (MonitoringTarget $target) use ($withState) {
+            $row = [
                 'id' => $target->id,
                 'name' => $target->name,
                 'dashboard_group' => $target->dashboard_group,
@@ -184,36 +183,14 @@ class DashboardController
                 'current_status' => $target->current_status,
                 'is_maintenance' => $target->is_maintenance,
                 'last_checked_at' => $target->last_checked_at?->toIso8601String(),
-                'state' => $state,
-                'heartbeat' => $this->heartbeat($target->id),
             ];
+            if ($withState) {
+                $row['state'] = $this->state->get($target->id);
+            }
+            return $row;
         })->all();
     }
 
-    /**
-     * Last 60 check outcomes, oldest first.
-     *
-     * A slot with no check is returned as null so the UI can render an empty slot.
-     * Padding with a fabricated 'UP' would invent 60 healthy checks that never
-     * happened (R-17, R-38).
-     *
-     * @return array<int, string|null>
-     */
-    private function heartbeat(string $targetId): array
-    {
-        $logs = DB::table('monitoring_logs')
-            ->where('target_id', $targetId)
-            ->orderByDesc('checked_at')
-            ->limit(60)
-            ->pluck('status')
-            ->all();
-
-        // Oldest -> newest, pad the front to 60 with nulls
-        $logs = array_reverse($logs);
-        $pad = array_fill(0, max(0, 60 - count($logs)), null);
-
-        return array_slice([...$pad, ...$logs], -60);
-    }
 
     private function activeIncidents(): array
     {
@@ -235,96 +212,117 @@ class DashboardController
     }
 
     /**
-     * Average uptime over the window, or null when no daily rollup exists yet.
-     * Returning null lets the UI say "no data" instead of showing a fabricated 100%
-     * (R-17, R-38).
+     * Pooled monthly SLA across active targets, or null when no log exists yet.
+     * Returning null lets the UI say "no data" instead of showing a fabricated 100%.
      */
     private function globalSla(): ?float
     {
-        $avg = DB::table('monitoring_daily_summaries')
-            ->where('summary_date', '>=', now()->subDays(30))
-            ->avg('uptime_percentage');
+        $now = now()->setTimezone('Asia/Jakarta');
+        $start = $now->copy()->startOfMonth();
+        $end = $now->copy()->endOfMonth();
 
-        return $avg === null ? null : round((float) $avg, 2);
+        // Maintenance empty for now; manual schedule input fills the map later.
+        $result = $this->sla->forWindow($start, $end);
+
+        return $result['sla'] === null ? null : round($result['sla'], 2);
     }
 
     /**
-     * Daily SLA rows for the NOC trend chart, one entry per rollup day for the
-     * last 30 days, oldest first. The summary table holds one row per target per
-     * day, so uptime and latency are averaged across the targets that reported
-     * that day. A day with no rollup row is absent instead of padded, and a day
-     * without an incident gets a real 0 (R-17, R-38).
+     * Daily SLA rows for the NOC trend chart, last 30 calendar days oldest first.
+     * Each day is one pooled forWindow call, so no-data days carry null uptime
+     * instead of a padded 100. Latency and incidents keep their existing queries.
      *
      * @return array<int, array{date: string, uptime: float|null, avg_latency: float|null, incidents: int}>
      */
     private function slaTrend(): array
     {
-        $rows = DB::table('monitoring_daily_summaries')
-            ->where('summary_date', '>=', now()->subDays(30))
-            ->groupBy('summary_date')
-            ->orderBy('summary_date')
-            ->selectRaw('summary_date, AVG(uptime_percentage) AS uptime, AVG(avg_response_time_ms) AS avg_latency')
-            ->get();
-
-        if ($rows->isEmpty()) {
-            return [];
-        }
-
+        $today = now()->setTimezone('Asia/Jakarta')->startOfDay();
         $incidents = DB::table('incidents')
-            ->where('started_at', '>=', now()->subDays(30))
+            ->where('started_at', '>=', $today->copy()->subDays(29))
             ->groupBy('day')
             ->selectRaw("to_char(started_at, 'YYYY-MM-DD') AS day, COUNT(*) AS total")
             ->pluck('total', 'day');
 
-        return $rows->map(fn ($row) => [
-            'date' => (string) $row->summary_date,
-            'uptime' => $row->uptime === null ? null : round((float) $row->uptime, 2),
-            'avg_latency' => $row->avg_latency === null ? null : round((float) $row->avg_latency, 1),
-            'incidents' => (int) ($incidents[(string) $row->summary_date] ?? 0),
-        ])->all();
+        $points = [];
+        for ($i = 29; $i >= 0; $i--) {
+            $day = $today->copy()->subDays($i);
+            $dayStart = $day->copy()->startOfDay();
+            $dayEnd = $day->copy()->endOfDay();
+
+            // Maintenance empty for now; manual schedule input fills the map later.
+            $agg = $this->sla->forWindow($dayStart, $dayEnd);
+
+            $latency = DB::table('monitoring_logs')
+                ->whereBetween('checked_at', [$dayStart, $dayEnd])
+                ->avg('response_time_ms');
+
+            $points[] = [
+                'date' => $day->toDateString(),
+                'uptime' => $agg['sla'] === null ? null : round($agg['sla'], 2),
+                'avg_latency' => $latency === null ? null : round((float) $latency, 1),
+                'incidents' => (int) ($incidents[$day->toDateString()] ?? 0),
+            ];
+        }
+
+        return $points;
     }
 
     /**
-     * Latest rollup date, or null when no daily rollup exists yet.
+     * Latest log date, or null when no log exists yet.
      */
-    private function latestSummaryDate(): ?string
+    private function latestLogDate(): ?string
     {
-        $max = DB::table('monitoring_daily_summaries')->max('summary_date');
+        $max = DB::table('monitoring_logs')->max('checked_at');
 
-        return $max === null ? null : (string) $max;
+        return $max === null ? null : now()->parse($max)->setTimezone('Asia/Jakarta')->toDateString();
     }
 
     /**
-     * Per-target SLA rows for the latest rollup day, worst uptime first.
+     * Per-target SLA rows for the latest day with log data, worst uptime first.
      *
-     * @return array<int, array{target_id: string, name: string, current_status: string, uptime: float, total_checks: int, failed_checks: int}>
+     * @return array<int, array{target_id: string, name: string, current_status: string, uptime: float|null, total_checks: int, failed_checks: int}>
      */
     private function targetDailySla(): array
     {
-        $latest = $this->latestSummaryDate();
+        $latest = $this->latestLogDate();
 
         if ($latest === null) {
             return [];
         }
 
-        return DB::table('monitoring_daily_summaries as s')
-            ->join('monitoring_targets as t', 't.id', '=', 's.target_id')
-            ->where('s.summary_date', $latest)
-            ->where('t.is_active', true)
-            ->orderBy('s.uptime_percentage')
-            ->select('s.target_id', 't.name', 't.current_status', 's.uptime_percentage as uptime', 's.total_checks', 's.failed_checks')
-            ->get()
-            ->map(fn ($row) => [
-                'target_id' => $row->target_id,
-                'name' => $row->name,
-                'current_status' => $row->current_status,
-                'uptime' => round((float) $row->uptime, 2),
-                'total_checks' => (int) $row->total_checks,
-                'failed_checks' => (int) $row->failed_checks,
-            ])
+        $day = now()->setTimezone('Asia/Jakarta')->parse($latest);
+        $dayStart = $day->copy()->startOfDay();
+        $dayEnd = $day->copy()->endOfDay();
+
+        // Maintenance empty for now; manual schedule input fills the map later.
+        $result = $this->sla->forWindow($dayStart, $dayEnd);
+        $byTarget = collect($result['targets'])->keyBy('target_id');
+
+        return MonitoringTarget::where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name', 'current_status'])
+            ->map(function (MonitoringTarget $target) use ($byTarget, $dayStart, $dayEnd) {
+                $row = $byTarget->get($target->id);
+                $counts = DB::table('monitoring_logs')
+                    ->where('target_id', $target->id)
+                    ->whereBetween('checked_at', [$dayStart, $dayEnd])
+                    ->selectRaw("COUNT(*) AS total, COUNT(*) FILTER (WHERE status = 'DOWN') AS down_checks")
+                    ->first();
+
+                return [
+                    'target_id' => $target->id,
+                    'name' => $target->name,
+                    'current_status' => $target->current_status,
+                    'uptime' => $row === null || $row['sla'] === null ? null : round($row['sla'], 2),
+                    'total_checks' => (int) ($counts->total ?? 0),
+                    'failed_checks' => (int) ($counts->down_checks ?? 0),
+                ];
+            })
+            ->filter(fn ($row) => $row['uptime'] !== null)
+            ->sortBy(fn ($row) => $row['uptime'])
+            ->values()
             ->all();
     }
-
     /**
      * Aggregate SNMP traffic (rx/tx) for the area chart.
      */

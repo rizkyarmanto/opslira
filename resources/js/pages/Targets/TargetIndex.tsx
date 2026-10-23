@@ -25,6 +25,7 @@ interface Props {
  */
 export default function TargetIndex({ targets, filters: initialFilters }: Props) {
     const [drawerOpen, setDrawerOpen] = useState(false);
+    const [editingTarget, setEditingTarget] = useState<MonitoringTarget | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
     const [reloading, setReloading] = useState(false);
     const [confirmTarget, setConfirmTarget] = useState<MonitoringTarget | null>(null);
@@ -177,7 +178,7 @@ export default function TargetIndex({ targets, filters: initialFilters }: Props)
                     Reload
                 </Button>
 
-                <Button className="ml-auto" onClick={() => setDrawerOpen(true)}>
+                <Button className="ml-auto" onClick={() => { setEditingTarget(null); setDrawerOpen(true); }}>
                     <Plus size={15} aria-hidden />
                     Add target
                 </Button>
@@ -272,6 +273,14 @@ export default function TargetIndex({ targets, filters: initialFilters }: Props)
                                             />
                                         </td>
                                         <td className="px-4 py-3 text-right">
+                                            <div className="inline-flex gap-2">
+                                                <Button
+                                                    variant="ghost"
+                                                    onClick={() => setEditingTarget(target)}
+                                                    className="!px-3 !py-1.5 !text-xs"
+                                                >
+                                                    Edit
+                                                </Button>
                                             {target.is_active && (
                                                 <Button
                                                     variant="ghost"
@@ -282,6 +291,7 @@ export default function TargetIndex({ targets, filters: initialFilters }: Props)
                                                     Disable
                                                 </Button>
                                             )}
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -308,9 +318,10 @@ export default function TargetIndex({ targets, filters: initialFilters }: Props)
             />
 
             <TargetFormDrawer
-                open={drawerOpen}
-                onClose={() => setDrawerOpen(false)}
+                open={drawerOpen || editingTarget !== null}
+                onClose={() => { setDrawerOpen(false); setEditingTarget(null); }}
                 onSaved={reloadTargets}
+                editing={editingTarget}
             />
         </AppLayout>
     );

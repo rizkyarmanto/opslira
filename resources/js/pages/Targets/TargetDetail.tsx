@@ -1,17 +1,19 @@
+import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import ReactECharts from 'echarts-for-react';
-import { ArrowLeft, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, ShieldCheck, Pencil } from 'lucide-react';
 import AppLayout from '@/components/shared/AppLayout';
+import Button from '@/components/shared/Button';
 import Card from '@/components/shared/Card';
 import StatusBadge from '@/components/shared/StatusBadge';
 import ProtocolBadge from '@/components/beautiful-ui/ProtocolBadge';
 import ExpiryCountdownCard from '@/components/beautiful-ui/ExpiryCountdownCard';
 import SlidingNumber from '@/components/motion-primitives/SlidingNumber';
 import NoData from '@/components/shared/NoData';
+import TargetFormDrawer from '@/pages/Targets/TargetFormDrawer';
 import { formatDateTime, relativeTime } from '@/lib/time';
 import type { Incident, MonitoringTarget, TargetState } from '@/types/monitoring';
-
 interface Props {
     target: MonitoringTarget & { state: TargetState; has_credentials: boolean };
     logs: Array<{
@@ -30,6 +32,7 @@ interface Props {
  * that question (C-3). Logs are newest first with named columns (R-20).
  */
 export default function TargetDetail({ target, logs, incidents }: Props) {
+    const [editing, setEditing] = useState(false);
     const ordered = [...logs].reverse();
     const times = ordered.map((l) => new Date(l.checked_at).toLocaleTimeString('en-US'));
     const latencies = ordered.map((l) => l.response_time_ms);
@@ -89,11 +92,13 @@ export default function TargetDetail({ target, logs, incidents }: Props) {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <Button variant="ghost" onClick={() => setEditing(true)} className="!px-3 !py-1.5 !text-xs">
+                        <Pencil size={14} aria-hidden /> Edit
+                    </Button>
                     <ProtocolBadge protocolType={target.protocol_type} />
                     <StatusBadge status={target.current_status} />
                 </div>
             </div>
-
             <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Card className="p-4">
                     <p className="field-label">Environment</p>
@@ -201,6 +206,13 @@ export default function TargetDetail({ target, logs, incidents }: Props) {
                     )}
                 </Card>
             </div>
+            <TargetFormDrawer
+                open={editing}
+                onClose={() => setEditing(false)}
+                onSaved={() => router.reload()}
+                editing={target}
+                hasCredentials={target.has_credentials}
+            />
         </AppLayout>
     );
 }

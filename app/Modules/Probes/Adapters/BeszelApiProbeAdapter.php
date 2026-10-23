@@ -17,18 +17,19 @@ use Illuminate\Support\Str;
  */
 class BeszelApiProbeAdapter extends BaseProbeAdapter
 {
-    private const TOKEN_CACHE_KEY = 'beszel:token';
-
+    private const TOKEN_CACHE_PREFIX = 'beszel:token';
+    public static function forgetToken(string $hubUrl, string $email): void
+    {
+        Cache::forget(self::TOKEN_CACHE_PREFIX.':'.md5($hubUrl).':'.md5($email));
+    }
     public function supportsProtocol(string $protocolType): bool
     {
         return $protocolType === 'BESZEL_API';
     }
-
     public function execute(): ProbeResult
     {
         $hubUrl = rtrim(trim((string) ($this->config('hub_url') ?: $this->config('host'))), '/');
         $systemId = $this->config('beszel_system_id');
-
         if (! $hubUrl || ! $systemId) {
             return ProbeResult::down('Missing hub_url or beszel_system_id');
         }
@@ -50,11 +51,9 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
             // System status
             $system = $this->authedGet($token)
                 ->get("{$hubUrl}/api/collections/systems/records/{$systemId}");
-
             if ($system->failed()) {
-                return ProbeResult::down("Beszel systems query failed: HTTP {$system->status()}");
+                return ProbeResult::down("Beszel systems query failed: HTTP {$system->status()} ".Str::limit((string) $system->body(), 300));
             }
-
             // Latest stats
             $stats = $this->authedGet($token)
                 ->get("{$hubUrl}/api/collections/system_stats/records", [
@@ -62,10 +61,11 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
                     'sort' => '-created',
                     'perPage' => 1,
                 ]);
-
+            if ($stats->failed()) {
+                return ProbeResult::down("Beszel stats query failed: HTTP {$stats->status()} ".Str::limit((string) $stats->body(), 300));
+            }
             $record = $stats->json('items.0', []);
             $systemData = $system->json();
-
             $metrics = [
                 'agent_status' => $systemData['status'] ?? 'unknown',
                 'cpu_pct' => (float) ($record['cpu'] ?? 0),
@@ -144,7 +144,7 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
 
         // Keyed per hub + email so two Beszel targets with different logins never
         // share a JWT.
-        $cacheKey = self::TOKEN_CACHE_KEY.':'.md5($hubUrl).':'.md5($email);
+        $cacheKey = self::TOKEN_CACHE_PREFIX.':'.md5($hubUrl).':'.md5($email);
         $cached = Cache::get($cacheKey);
         if (is_array($cached)) {
             return [
@@ -158,20 +158,17 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
                 'identity' => $email,
                 'password' => $password,
             ]);
-
-        if ($response->successful() && $response->json('token')) {
-            $auth = ['token' => (string) $response->json('token'), 'error' => null];
+        $authToken = $response->json('token') ?? $response->json('authToken');
+        if ($response->successful() && is_string($authToken) && $authToken !== '') {
+            $auth = ['token' => $authToken, 'error' => null];
             Cache::put($cacheKey, $auth, (int) config('services.beszel.token_cache_ttl', 43200));
-
             return $auth;
         }
-
         $auth = [
             'token' => null,
             'error' => "HTTP {$response->status()}: ".Str::limit((string) $response->body(), 300),
         ];
         Cache::put($cacheKey, $auth, 60);
-
         return $auth;
     }
 }
