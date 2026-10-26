@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -45,6 +43,9 @@ type Generator struct {
 func NewGenerator(pool *pgxpool.Pool, sla *SLA, m *mailer.Mailer, cfg config.Config, logger *slog.Logger) *Generator {
 	return &Generator{pool: pool, sla: sla, mailer: m, cfg: cfg, logger: logger, archiver: reportarchive.New(cfg.ReportS3)}
 }
+
+// Archiver exposes the S3 object store for downloads.
+func (g *Generator) Archiver() *reportarchive.Archiver { return g.archiver }
 
 // Run generates the schedule's current period report. It returns the
 // created/skipped outcome, or an error after marking the report row FAILED.
@@ -139,15 +140,14 @@ func (g *Generator) Run(ctx context.Context, schedule Schedule) (Outcome, error)
 		if err != nil {
 			return failed(fmt.Errorf("PDF build failed: %w", err))
 		}
-		rel, err := g.storeFile(periodStart, storedPeriod, "pdf", pdf)
+		key, err := g.storeArtifact(ctx, reportID, periodStart, storedPeriod, "pdf", pdf, "application/pdf")
 		if err != nil {
 			return failed(err)
 		}
 		if _, err := g.pool.Exec(ctx,
-			`UPDATE generated_reports SET pdf_file_path = $2 WHERE id = $1`, reportID, rel); err != nil {
+			`UPDATE generated_reports SET pdf_file_path = $2 WHERE id = $1`, reportID, key); err != nil {
 			return failed(fmt.Errorf("report update: %w", err))
 		}
-		g.archive(ctx, reportID, rel, pdf, "application/pdf")
 	}
 
 	if containsFormat(schedule.ReportFormats, "XLSX") {
@@ -155,15 +155,14 @@ func (g *Generator) Run(ctx context.Context, schedule Schedule) (Outcome, error)
 		if err != nil {
 			return failed(fmt.Errorf("Excel build failed: %w", err))
 		}
-		rel, err := g.storeFile(periodStart, storedPeriod, "xlsx", xlsx)
+		key, err := g.storeArtifact(ctx, reportID, periodStart, storedPeriod, "xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 		if err != nil {
 			return failed(err)
 		}
 		if _, err := g.pool.Exec(ctx,
-			`UPDATE generated_reports SET excel_file_path = $2 WHERE id = $1`, reportID, rel); err != nil {
+			`UPDATE generated_reports SET excel_file_path = $2 WHERE id = $1`, reportID, key); err != nil {
 			return failed(fmt.Errorf("report update: %w", err))
 		}
-		g.archive(ctx, reportID, rel, xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	}
 
 	if err := g.complete(ctx, reportID, data); err != nil {
@@ -344,37 +343,23 @@ func (g *Generator) sendEmails(ctx context.Context, schedule Schedule, reportID 
 	return sent, failed, nil
 }
 
-// storeFile writes artifact content under
-// REPORT_STORAGE_DIR/reports/YYYY-MM/<PERIOD>-Ymd-His.<ext> and returns the
-// stored relative path (forward slashes, Laravel-style).
-func (g *Generator) storeFile(periodStart time.Time, periodType, ext string, content []byte) (string, error) {
+// storeArtifact uploads content to S3 under
+// reports/YYYY-MM/<PERIOD>-Ymd-His.<ext> and returns the object key. S3 is
+// the only storage: REPORT_S3_* must be configured or generation fails.
+func (g *Generator) storeArtifact(ctx context.Context, reportID string, periodStart time.Time, periodType, ext string, content []byte, contentType string) (string, error) {
 	directory := "reports/" + periodStart.Format("2006-01")
 	name := periodType + "-" + time.Now().Format("20060102-150405") + "." + ext
-
-	full := filepath.Join(g.cfg.ReportStorageDir, filepath.FromSlash(directory))
-	if err := os.MkdirAll(full, 0o755); err != nil {
-		return "", fmt.Errorf("report dir: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(full, name), content, 0o644); err != nil {
-		return "", fmt.Errorf("report write: %w", err)
-	}
-
-	return directory + "/" + name, nil
-}
-
-// archive uploads one artifact to the S3 archive sink. Best-effort: skipped
-// when REPORT_S3_ENDPOINT is empty, and a failure only logs — the local
-// file stays the source of truth and the report still completes.
-func (g *Generator) archive(ctx context.Context, reportID, rel string, content []byte, contentType string) {
+	key := directory + "/" + name
 	if g.archiver == nil {
-		return
+		return "", fmt.Errorf("report storage: REPORT_S3_ENDPOINT is empty; configure S3 to generate reports")
 	}
-	key, err := g.archiver.Put(ctx, rel, content, contentType)
+	stored, err := g.archiver.Put(ctx, key, content, contentType)
 	if err != nil {
-		g.logger.Warn("Report archive upload failed", "report_id", reportID, "key", rel, "error", err.Error())
-		return
+		g.logger.Error("Report S3 upload failed", "report_id", reportID, "key", key, "error", err.Error())
+		return "", err
 	}
-	g.logger.Info("Report archived to S3", "report_id", reportID, "key", key)
+	g.logger.Info("Report stored to S3", "report_id", reportID, "key", stored)
+	return stored, nil
 }
 
 // resolvePeriod mirrors GenerateAndSendReportJob::resolvePeriod: the window

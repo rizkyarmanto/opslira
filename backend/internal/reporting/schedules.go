@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -442,8 +441,8 @@ func (h *Handler) emailLogs(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"logs": logs, "reports": reports})
 }
 
-// download streams a generated artifact (pdf or xlsx) from the report
-// storage root; missing rows or files answer 404 (ReportController::download).
+// download streams a generated artifact (pdf or xlsx) from S3; missing rows
+// or objects answer 404 (ReportController::download).
 func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
 	reportID := chi.URLParam(r, "reportID")
 	format := chi.URLParam(r, "format")
@@ -466,26 +465,29 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	relative := pdfPath
+	contentType := "application/pdf"
 	if format == "xlsx" {
 		relative = excelPath
+		contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 	}
 	if !relative.Valid || relative.String == "" {
 		httpx.Fail(w, http.StatusNotFound, "Report file not found.")
 		return
 	}
 
-	full, ok := h.storagePath(relative.String)
-	if !ok {
+	body, storedType, err := h.archiver().Get(r.Context(), relative.String)
+	if err != nil {
 		httpx.Fail(w, http.StatusNotFound, "Report file not found.")
 		return
 	}
-	if _, err := os.Stat(full); err != nil {
-		httpx.Fail(w, http.StatusNotFound, "Report file not found.")
-		return
+	if storedType != "" {
+		contentType = storedType
 	}
 
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(filepath.FromSlash(relative.String))+`"`)
-	http.ServeFile(w, r, full)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 func (h *Handler) loadSchedule(ctx context.Context, id string) (Schedule, error) {

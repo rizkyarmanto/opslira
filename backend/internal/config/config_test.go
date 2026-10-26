@@ -38,9 +38,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Redis.DB != 0 || cfg.Redis.CacheDB != 1 {
 		t.Errorf("Redis DBs = %d/%d, want 0/1", cfg.Redis.DB, cfg.Redis.CacheDB)
 	}
-	if cfg.ReportStorageDir != "/data/reports" {
-		t.Errorf("ReportStorageDir = %q, want /data/reports", cfg.ReportStorageDir)
-	}
 	if cfg.ReportS3.Endpoint != "" || cfg.ReportS3.Bucket != "" {
 		t.Errorf("ReportS3 defaults = %+v, want empty endpoint/bucket", cfg.ReportS3)
 	}

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -61,8 +62,7 @@ func (a *Archiver) clientFor(ctx context.Context) (*s3.Client, error) {
 }
 
 // Put uploads content to <prefix>/<key> and returns the object key. Callers
-// pass the local relative path (reports/YYYY-MM/<PERIOD>-....<ext>) so the
-// bucket layout mirrors REPORT_STORAGE_DIR.
+// pass the layout reports/YYYY-MM/<PERIOD>-....<ext>; S3 is the only store.
 func (a *Archiver) Put(ctx context.Context, key string, content []byte, contentType string) (string, error) {
 	if a == nil {
 		return "", fmt.Errorf("report archive: uploader disabled")
@@ -90,4 +90,38 @@ func (a *Archiver) Put(ctx context.Context, key string, content []byte, contentT
 		return "", fmt.Errorf("report archive upload %s: %w", objectKey, err)
 	}
 	return objectKey, nil
+}
+
+// Get streams an object back. Missing keys surface the S3 NoSuchKey error
+// so callers can map it to 404.
+func (a *Archiver) Get(ctx context.Context, key string) ([]byte, string, error) {
+	if a == nil {
+		return nil, "", fmt.Errorf("report storage: uploader disabled")
+	}
+	if strings.TrimSpace(a.cfg.Bucket) == "" {
+		return nil, "", fmt.Errorf("report storage: REPORT_S3_BUCKET is empty")
+	}
+	client, err := a.clientFor(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	getCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	out, err := client.GetObject(getCtx, &s3.GetObjectInput{
+		Bucket: aws.String(a.cfg.Bucket),
+		Key:    aws.String(strings.Trim(key, "/")),
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("report storage fetch %s: %w", key, err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("report storage read %s: %w", key, err)
+	}
+	contentType := ""
+	if out.ContentType != nil {
+		contentType = *out.ContentType
+	}
+	return body, contentType, nil
 }

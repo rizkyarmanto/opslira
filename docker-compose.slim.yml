@@ -50,7 +50,6 @@ services:
       # Optional: HTML→PDF converter. Empty = PDF generation fails per-report
       # (row marked FAILED) while XLSX/HTML reports and the API keep working.
       GOTENBERG_URL: ${GOTENBERG_URL:-}
-      REPORT_STORAGE_DIR: ${REPORT_STORAGE_DIR:-/data/reports}
       REPORT_S3_ENDPOINT: ${REPORT_S3_ENDPOINT:-}
       REPORT_S3_BUCKET: ${REPORT_S3_BUCKET:-}
       REPORT_S3_ACCESS_KEY: ${REPORT_S3_ACCESS_KEY:-}
@@ -87,13 +86,8 @@ services:
       # dev seed (4 users / 8 targets / 3 schedules) instead.
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       BESZEL_TOKEN_CACHE_TTL: ${BESZEL_TOKEN_CACHE_TTL:-43200}
-    volumes:
-      - report_storage:/data/reports
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1"]
       interval: 15s
       timeout: 5s
       retries: 5
-
-volumes:
-  report_storage:

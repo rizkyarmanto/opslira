@@ -39,8 +39,7 @@ The important groups:
 | Listen / CORS / session | `API_LISTEN_ADDR`, `FRONTEND_ORIGIN`, `SESSION_TTL_SECONDS` |
 | Postgres 16 | `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`, `DB_SSLMODE` |
 | Redis 7 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `DB`, `REDIS_CACHE_DB` |
-| PDF converter (optional) | `GOTENBERG_URL` — empty disables PDF (rows fail per-report, XLSX/HTML keep working) |
-| Report files + S3 archive | `REPORT_STORAGE_DIR`, `REPORT_S3_ENDPOINT/BUCKET/ACCESS_KEY/SECRET_KEY/REGION/PREFIX` |
+| Report storage (S3-only, required) | `REPORT_S3_ENDPOINT/BUCKET/ACCESS_KEY/SECRET_KEY/REGION/PREFIX` — PDF+XLSX, all periods; generation fails without it |
 | Scheduler | `PROBE_CONCURRENCY`, `RUNNER_TICK_SECONDS`, `REPORT_TICK_SECONDS`, `ROLLUP_AT`, `PRUNE_AT`, `RUNNER_TIMEZONE` |
 | Secrets | `APP_KEY`, `APP_ENCRYPTION_KEY`, `OPSLIRA_RUNNER_TOKEN` (required) |
 | Alerts / mail | `ALERT_RECIPIENTS`, `MAIL_*`, `TELEGRAM_*`, `SLACK_WEBHOOK_URL` |
@@ -51,10 +50,9 @@ Notes:
 - Slim compose ignores bundled infra on purpose: point `DB_HOST`/`REDIS_HOST`
   at what you run (dev default `127.0.0.1`). Full compose pins the backend to
   `postgres`/`redis`/`gotenberg` services instead.
-- ICMP ping probes need `NET_RAW` (already in both compose files for backend).
-- Report S3 archive (PDF+XLSX, all schedules/periods) is best-effort: empty
-  `REPORT_S3_ENDPOINT` skips upload, local files stay the source of truth.
-  Check logs for `Report archived to S3` / `Report archive upload failed`.
+- Report storage is S3-only: generation uploads PDF+XLSX straight to the bucket
+  (`pdf_file_path`/`excel_file_path` store object keys) and downloads stream
+  from S3. No local disk. Check logs for `Report stored to S3`.
 
 ## First boot / seeding
 
@@ -85,6 +83,6 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1 npm run dev --prefix frontend
 - `cmd/api/main.go` — wiring: config → DB/Redis → migrations → seed → routes + scheduler
 - `internal/config/` — env loading with validated defaults
 - `internal/auth|users|targets|dashboard|incidents|reporting|scheduler|...` — domain modules
-- `internal/reportarchive/` — optional S3 upload for generated PDF/XLSX
+- `internal/reportarchive/` — S3 object store for generated PDF/XLSX (Put/Get)
 - `internal/reportrender/` — HTML/XLSX builders + Gotenberg PDF client
 - `migrations/` + `seed.go` — embedded idempotent bootstrap

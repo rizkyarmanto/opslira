@@ -69,7 +69,6 @@ type Config struct {
 	DB               DB
 	Redis            Redis
 	GotenbergURL     string
-	ReportStorageDir string
 	ReportS3         ReportS3
 	AppKey           string
 	AppEncryptionKey string
@@ -98,10 +97,9 @@ type Config struct {
 // integers, clock times or the timezone abort startup.
 func Load() (Config, error) {
 	cfg := Config{
-		ListenAddr:       envOr("API_LISTEN_ADDR", ":8080"),
-		FrontendOrigin:   envOr("FRONTEND_ORIGIN", "http://localhost"),
-		GotenbergURL:     strings.TrimRight(envOr("GOTENBERG_URL", "http://127.0.0.1:3000"), "/"),
-		ReportStorageDir: envOr("REPORT_STORAGE_DIR", "/data/reports"),
+		ListenAddr:     envOr("API_LISTEN_ADDR", ":8080"),
+		FrontendOrigin: envOr("FRONTEND_ORIGIN", "http://localhost"),
+		GotenbergURL:   strings.TrimRight(envOr("GOTENBERG_URL", "http://127.0.0.1:3000"), "/"),
 		ReportS3: ReportS3{
 			Endpoint:  strings.TrimRight(strings.TrimSpace(os.Getenv("REPORT_S3_ENDPOINT")), "/"),
 			Bucket:    strings.TrimSpace(os.Getenv("REPORT_S3_BUCKET")),

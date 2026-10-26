@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -12,6 +11,7 @@ import (
 
 	"opslira/backend/internal/config"
 	"opslira/backend/internal/mailer"
+	"opslira/backend/internal/reportarchive"
 )
 
 // Handler serves the /reports endpoints and drives the report scheduler tick.
@@ -95,13 +95,5 @@ func (h *Handler) DispatchDue(ctx context.Context) (int, error) {
 	return dispatched, nil
 }
 
-// storagePath resolves a stored relative artifact path inside the report
-// storage root, rejecting traversal attempts.
-func (h *Handler) storagePath(relative string) (string, bool) {
-	normalized := strings.ReplaceAll(relative, "\\", "/")
-	if strings.HasPrefix(normalized, "/") || strings.Contains(normalized, "..") || strings.Contains(normalized, ":") {
-		return "", false
-	}
-
-	return strings.TrimSuffix(h.cfg.ReportStorageDir, "/") + "/" + normalized, true
-}
+// archiver exposes the S3 object store for downloads.
+func (h *Handler) archiver() *reportarchive.Archiver { return h.generator.Archiver() }
