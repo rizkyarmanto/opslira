@@ -145,8 +145,8 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
                             const metrics = (target.state?.summary_metrics ?? {}) as Record<string, number>;
 
                             return (
+                                <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
                                 <StatusCard
-                                    key={target.id}
                                     status={target.current_status}
                                     heartbeat={target.heartbeat}
                                     header={
@@ -197,6 +197,7 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
                                         <ProgressBar label="Memory" value={metrics.mem_usage_pct ?? null} />
                                     </div>
                                 </StatusCard>
+                                </Link>
                             );
                         })}
                     </div>
@@ -227,8 +228,8 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
                             const metrics = (target.state?.summary_metrics ?? {}) as Record<string, number>;
 
                             return (
+                                <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
                                 <StatusCard
-                                    key={target.id}
                                     status={target.current_status}
                                     heartbeat={target.heartbeat}
                                     header={
@@ -269,6 +270,7 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
                                         />
                                     </div>
                                 </StatusCard>
+                                </Link>
                             );
                         })}
                     </div>

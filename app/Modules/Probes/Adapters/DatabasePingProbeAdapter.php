@@ -56,9 +56,7 @@ class DatabasePingProbeAdapter extends BaseProbeAdapter
                 'query_exec_ms' => $queryExec,
             ];
 
-            // The form sends "true"/"false" as text; a plain (bool) cast would turn
-            // the string "false" on.
-            if (filter_var($this->config('collect_connection_stats', false), FILTER_VALIDATE_BOOLEAN)) {
+            if (filter_var($this->config('collect_connection_stats', true), FILTER_VALIDATE_BOOLEAN)) {
                 $metrics = [...$metrics, ...$this->connectionStats($pdo, $driver)];
             }
 
@@ -94,8 +92,14 @@ class DatabasePingProbeAdapter extends BaseProbeAdapter
 
                 return ['active_connections' => (int) $active, 'max_connections' => (int) $max];
             }
+
+            if ($driver === 'sqlsrv') {
+                $active = $pdo->query('SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1')->fetchColumn();
+                $max = $pdo->query('SELECT @@MAX_CONNECTIONS')->fetchColumn();
+
+                return ['active_connections' => (int) $active, 'max_connections' => (int) $max];
+            }
         } catch (\Throwable $e) {
-            // Stats are best-effort
         }
 
         return [];

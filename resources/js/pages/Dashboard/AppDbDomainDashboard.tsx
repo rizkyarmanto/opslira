@@ -60,12 +60,13 @@ export default function AppDbDomainDashboard({ targets, environment, counts }: P
                     const httpStatus = metrics.http_status;
 
                     return (
-                        <Card key={target.id} className="p-5">
+                        <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
+                        <Card className="p-5">
                             <div className="mb-2 flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                    <Link href={`/targets/${target.id}`} className="truncate text-sm font-medium text-noc-text hover:underline">
+                                    <span className="truncate text-sm font-medium text-noc-text">
                                         {target.name}
-                                    </Link>
+                                    </span>
                                     <p className="tabular truncate text-xs text-noc-muted">{target.host_or_endpoint}</p>
                                 </div>
                                 <StatusBadge status={target.current_status} />
@@ -98,6 +99,7 @@ export default function AppDbDomainDashboard({ targets, environment, counts }: P
                                 {relativeTime(target.last_checked_at) ?? 'Not yet checked'}
                             </p>
                         </Card>
+                        </Link>
                     );
                 })}
             </Section>
@@ -107,8 +109,8 @@ export default function AppDbDomainDashboard({ targets, environment, counts }: P
                     const metrics = (target.state?.summary_metrics ?? {}) as Record<string, string | number>;
 
                     return (
+                        <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
                         <ExpiryCountdownCard
-                            key={target.id}
                             name={target.name}
                             status={target.current_status}
                             domainName={target.host_or_endpoint}
@@ -118,6 +120,7 @@ export default function AppDbDomainDashboard({ targets, environment, counts }: P
                             sslExpiryDate={(metrics.ssl_expiry_date as string) ?? null}
                             sslIssuer={(metrics.ssl_issuer as string) ?? null}
                         />
+                        </Link>
                     );
                 })}
             </Section>
@@ -127,12 +130,13 @@ export default function AppDbDomainDashboard({ targets, environment, counts }: P
                     const metrics = (target.state?.summary_metrics ?? {}) as Record<string, number>;
 
                     return (
-                        <Card key={target.id} className="p-5">
+                        <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
+                        <Card className="p-5">
                             <div className="mb-2 flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                    <Link href={`/targets/${target.id}`} className="truncate text-sm font-medium text-noc-text hover:underline">
+                                    <span className="truncate text-sm font-medium text-noc-text">
                                         {target.name}
-                                    </Link>
+                                    </span>
                                     <p className="tabular truncate text-xs text-noc-muted">
                                         {target.host_or_endpoint}
                                         {target.port ? `:${target.port}` : ''}
@@ -159,6 +163,7 @@ export default function AppDbDomainDashboard({ targets, environment, counts }: P
                                 {relativeTime(target.last_checked_at) ?? 'Not yet checked'}
                             </p>
                         </Card>
+                        </Link>
                     );
                 })}
             </Section>

@@ -13,6 +13,7 @@ import SlidingNumber from '@/components/motion-primitives/SlidingNumber';
 import NoData from '@/components/shared/NoData';
 import TargetFormDrawer from '@/pages/Targets/TargetFormDrawer';
 import { formatDateTime, relativeTime } from '@/lib/time';
+import { api } from '@/lib/api';
 import type { Incident, MonitoringTarget, TargetState } from '@/types/monitoring';
 interface Props {
     target: MonitoringTarget & { state: TargetState; has_credentials: boolean };
@@ -33,11 +34,21 @@ interface Props {
  */
 export default function TargetDetail({ target, logs, incidents }: Props) {
     const [editing, setEditing] = useState(false);
+    const [busy, setBusy] = useState(false);
     const ordered = [...logs].reverse();
     const times = ordered.map((l) => new Date(l.checked_at).toLocaleTimeString('en-US'));
     const latencies = ordered.map((l) => l.response_time_ms);
 
     const hasLatency = latencies.some((v) => v !== null);
+    const enableTarget = async () => {
+        setBusy(true);
+        try {
+            await api.post(`/targets/${target.id}/enable`);
+            router.reload();
+        } finally {
+            setBusy(false);
+        }
+    };
 
     const option = {
         backgroundColor: 'transparent',
@@ -92,6 +103,11 @@ export default function TargetDetail({ target, logs, incidents }: Props) {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
+                    {!target.is_active && (
+                        <Button variant="ghost" loading={busy} onClick={enableTarget} className="!px-3 !py-1.5 !text-xs">
+                            Enable
+                        </Button>
+                    )}
                     <Button variant="ghost" onClick={() => setEditing(true)} className="!px-3 !py-1.5 !text-xs">
                         <Pencil size={14} aria-hidden /> Edit
                     </Button>

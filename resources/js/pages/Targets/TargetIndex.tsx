@@ -96,6 +96,15 @@ export default function TargetIndex({ targets, filters: initialFilters }: Props)
         }
     };
 
+    const enableTarget = async (target: MonitoringTarget) => {
+        setBusyId(target.id);
+        try {
+            await api.post(`/targets/${target.id}/enable`);
+            router.reload({ only: ['targets'] });
+        } finally {
+            setBusyId(null);
+        }
+    };
     return (
         <AppLayout title="Targets">
             <Head title="Targets" />
@@ -281,7 +290,7 @@ export default function TargetIndex({ targets, filters: initialFilters }: Props)
                                                 >
                                                     Edit
                                                 </Button>
-                                            {target.is_active && (
+                                            {target.is_active ? (
                                                 <Button
                                                     variant="ghost"
                                                     loading={busyId === target.id}
@@ -289,6 +298,15 @@ export default function TargetIndex({ targets, filters: initialFilters }: Props)
                                                     className="!border-status-down/30 !px-3 !py-1.5 !text-xs !text-status-down hover:!bg-status-down/10"
                                                 >
                                                     Disable
+                                                </Button>
+                                            ) : (
+                                                <Button
+                                                    variant="ghost"
+                                                    loading={busyId === target.id}
+                                                    onClick={() => enableTarget(target)}
+                                                    className="!px-3 !py-1.5 !text-xs"
+                                                >
+                                                    Enable
                                                 </Button>
                                             )}
                                             </div>

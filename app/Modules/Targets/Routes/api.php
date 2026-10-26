@@ -11,6 +11,5 @@ Route::middleware(['web', 'auth'])->group(function () {
     Route::get('/targets/{target}', [TargetController::class, 'show'])->name('api.targets.show');
     Route::put('/targets/{target}', [TargetController::class, 'update'])->name('api.targets.update');
     Route::delete('/targets/{target}', [TargetController::class, 'destroy'])->name('api.targets.destroy');
-    Route::post('/targets/{target}/test-connection', [TargetController::class, 'testConnection'])->name('api.targets.test-connection');
-    Route::post('/targets/{target}/toggle-maintenance', [TargetController::class, 'toggleMaintenance'])->name('api.targets.toggle-maintenance');
+    Route::post('/targets/{target}/enable', [TargetController::class, 'enable'])->name('api.targets.enable');
 });

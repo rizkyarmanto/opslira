@@ -142,8 +142,14 @@ export default function TargetFormDrawer({
         setSaving(true);
         setSaveError(null);
         try {
+            const configPayload = { ...(values.config_payload ?? {}) } as Record<string, unknown>;
+            if (values.target_type === 'BESZEL_SERVER' && configPayload.beszel_system_name === undefined && typeof configPayload.beszel_system_id === 'string') {
+                configPayload.beszel_system_name = configPayload.beszel_system_id;
+                delete configPayload.beszel_system_id;
+            }
             const payload = {
                 ...values,
+                config_payload: configPayload,
                 dashboard_group: dashboardGroupByTargetType[values.target_type],
                 protocol_type: protocolByTargetType[values.target_type],
             };
@@ -371,7 +377,7 @@ function DynamicFields({
             { key: 'db_driver', label: 'Driver', placeholder: 'pgsql, mysql, or sqlsrv' },
             { key: 'database_name', label: 'Database name' },
             { key: 'query', label: 'Test query', placeholder: 'SELECT 1' },
-            { key: 'check_replication_lag', label: 'Check replication lag', type: 'checkbox' },
+            { key: 'collect_connection_stats', label: 'Collect connection stats', type: 'checkbox' },
         ],
         MAIL_SERVER: [
             {
@@ -399,7 +405,7 @@ function DynamicFields({
             { key: 'bucket_name', label: 'Bucket name' },
         ],
         BESZEL_SERVER: [
-            { key: 'beszel_system_id', label: 'Beszel system ID' },
+            { key: 'beszel_system_name', label: 'Beszel system name' },
             { key: 'warn_cpu_pct', label: 'CPU warning (%)', type: 'number', placeholder: '85' },
             { key: 'warn_disk_pct', label: 'Disk warning (%)', type: 'number', placeholder: '85' },
         ],

@@ -58,12 +58,13 @@ export default function MailS3BeszelDashboard({ targets }: Props) {
                     const checked = m.dnsbl_checked === true || m.is_blacklisted !== undefined;
 
                     return (
-                        <Card key={target.id} className="p-5">
+                        <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
+                        <Card className="p-5">
                             <div className="mb-3 flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                    <Link href={`/targets/${target.id}`} className="tabular truncate text-sm font-medium text-noc-text hover:underline">
+                                    <span className="tabular truncate text-sm font-medium text-noc-text">
                                         {target.host_or_endpoint}
-                                    </Link>
+                                    </span>
                                     <p className="truncate text-xs text-noc-muted">{target.name}</p>
                                 </div>
                                 <StatusBadge status={target.current_status} />
@@ -104,6 +105,7 @@ export default function MailS3BeszelDashboard({ targets }: Props) {
                                 {relativeTime(target.last_checked_at) ?? 'Not yet checked'}
                             </p>
                         </Card>
+                        </Link>
                     );
                 })}
             </Section>
@@ -119,12 +121,13 @@ export default function MailS3BeszelDashboard({ targets }: Props) {
                     const bucket = (target.config_payload?.bucket_name as string) ?? target.name;
 
                     return (
-                        <Card key={target.id} className="p-5">
+                        <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
+                        <Card className="p-5">
                             <div className="mb-2 flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                    <Link href={`/targets/${target.id}`} className="truncate text-sm font-medium text-noc-text hover:underline">
+                                    <span className="truncate text-sm font-medium text-noc-text">
                                         {bucket}
-                                    </Link>
+                                    </span>
                                     <p className="tabular truncate text-xs text-noc-muted">{target.host_or_endpoint}</p>
                                 </div>
                                 <StatusBadge status={target.current_status} />
@@ -143,6 +146,7 @@ export default function MailS3BeszelDashboard({ targets }: Props) {
                                 </span>
                             </div>
                         </Card>
+                        </Link>
                     );
                 })}
             </Section>
@@ -158,12 +162,13 @@ export default function MailS3BeszelDashboard({ targets }: Props) {
                     const hasContainers = m.containers_running !== undefined || m.containers_unhealthy !== undefined;
 
                     return (
-                        <Card key={target.id} className="p-5">
+                        <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
+                        <Card className="p-5">
                             <div className="mb-4 flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                    <Link href={`/targets/${target.id}`} className="truncate text-sm font-medium text-noc-text hover:underline">
+                                    <span className="truncate text-sm font-medium text-noc-text">
                                         {target.name}
-                                    </Link>
+                                    </span>
                                     <p className="tabular truncate text-xs text-noc-muted">{target.host_or_endpoint}</p>
                                 </div>
                                 <StatusBadge status={target.current_status} />
@@ -189,6 +194,7 @@ export default function MailS3BeszelDashboard({ targets }: Props) {
                                 {relativeTime(target.last_checked_at) ?? 'Not yet checked'}
                             </p>
                         </Card>
+                        </Link>
                     );
                 })}
             </Section>

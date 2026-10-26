@@ -104,7 +104,7 @@ class MonitoringTargetSeeder extends Seeder
                 'host_or_endpoint' => 'http://beszel.kantor.co.id:8090',
                 'protocol_type' => 'BESZEL_API',
                 'config_payload' => [
-                    'beszel_system_id' => 'rec_xyz123456',
+                    'beszel_system_name' => 'Node-01',
                     'warn_cpu_pct' => 85,
                     'warn_mem_pct' => 90,
                     'warn_disk_pct' => 85,

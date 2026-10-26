@@ -179,6 +179,13 @@ class TargetController
         return response()->json(['ok' => true]);
     }
 
+    public function enable(MonitoringTarget $target): JsonResponse
+    {
+        $target->update(['is_active' => true]);
+
+        return response()->json(['ok' => true, 'is_active' => $target->is_active]);
+    }
+
     /**
      * Synchronous connection test. Does not persist a log.
      */
@@ -305,6 +312,12 @@ class TargetController
 
         if (is_array($data['config_payload'] ?? null)) {
             unset($data['config_payload']['icmp_only']);
+            if (($data['target_type'] ?? null) === 'BESZEL_SERVER') {
+                if (! isset($data['config_payload']['beszel_system_name']) && isset($data['config_payload']['beszel_system_id'])) {
+                    $data['config_payload']['beszel_system_name'] = $data['config_payload']['beszel_system_id'];
+                }
+                unset($data['config_payload']['beszel_system_id']);
+            }
         }
 
         return $data;

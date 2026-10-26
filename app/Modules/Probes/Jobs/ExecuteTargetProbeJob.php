@@ -21,7 +21,7 @@ class ExecuteTargetProbeJob implements ShouldQueue
 
     public int $tries = 1;
 
-    public int $timeout = 15;
+    public int $timeout = 70;
 
     public function __construct(public string $targetId)
     {

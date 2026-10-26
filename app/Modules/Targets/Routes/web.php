@@ -10,6 +10,5 @@ Route::middleware(['web', 'auth'])->prefix('targets')->name('targets.')->group(f
     Route::get('/{target}', [TargetController::class, 'show'])->name('show');
     Route::put('/{target}', [TargetController::class, 'update'])->name('update');
     Route::delete('/{target}', [TargetController::class, 'destroy'])->name('destroy');
-    Route::post('/{target}/test-connection', [TargetController::class, 'testConnection'])->name('test-connection');
-    Route::post('/{target}/toggle-maintenance', [TargetController::class, 'toggleMaintenance'])->name('toggle-maintenance');
+    Route::post('/{target}/enable', [TargetController::class, 'enable'])->name('enable');
 });

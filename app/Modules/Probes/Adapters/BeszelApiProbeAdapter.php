@@ -29,9 +29,9 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
     public function execute(): ProbeResult
     {
         $hubUrl = rtrim(trim((string) ($this->config('hub_url') ?: $this->config('host'))), '/');
-        $systemId = $this->config('beszel_system_id');
-        if (! $hubUrl || ! $systemId) {
-            return ProbeResult::down('Missing hub_url or beszel_system_id');
+        $systemName = (string) ($this->config('beszel_system_name') ?: '');
+        if (! $hubUrl || $systemName === '') {
+            return ProbeResult::down('Missing hub_url or beszel_system_name');
         }
 
         $apiToken = (string) $this->credential('api_token', '');
@@ -41,42 +41,65 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
             return ProbeResult::down('Missing Beszel credentials');
         }
 
+        $calls = $apiToken !== '' ? 2 : 3;
+        $perCall = $this->callBudget($calls);
+
         try {
-            $auth = $this->authToken($hubUrl);
+            try {
+                $auth = $this->authToken($hubUrl, $perCall);
+            } catch (ConnectionException $e) {
+                return ProbeResult::down("Beszel hub unreachable during auth at {$hubUrl} after {$perCall}s (check hub reachability or raise timeout_seconds): ".$e->getMessage());
+            }
             $token = $auth['token'];
             if (! $token) {
                 return ProbeResult::down('Beszel authentication failed: '.($auth['error'] ?? 'no token returned'));
             }
 
-            // System status
-            $system = $this->authedGet($token)
-                ->get("{$hubUrl}/api/collections/systems/records/{$systemId}");
-            if ($system->failed()) {
-                return ProbeResult::down("Beszel systems query failed: HTTP {$system->status()} ".Str::limit((string) $system->body(), 300));
+            // Resolve the human system name to a PocketBase record id.
+            try {
+                $list = $this->authedGet($token, $perCall)
+                    ->get("{$hubUrl}/api/collections/systems/records", [
+                        'filter' => "(name='{$systemName}')",
+                        'perPage' => 5,
+                    ]);
+            } catch (ConnectionException $e) {
+                return ProbeResult::down("Beszel hub unreachable during systems query at {$hubUrl} after {$perCall}s (check hub reachability or raise timeout_seconds): ".$e->getMessage());
+            }
+            if ($list->failed()) {
+                return ProbeResult::down("Beszel systems query failed: HTTP {$list->status()} ".Str::limit((string) $list->body(), 300));
+            }
+            $systemData = $list->json('items.0', []);
+            $systemId = (string) ($systemData['id'] ?? '');
+            if ($systemId === '') {
+                return ProbeResult::down("Beszel system '{$systemName}' not found on hub");
             }
             // Latest stats
-            $stats = $this->authedGet($token)
-                ->get("{$hubUrl}/api/collections/system_stats/records", [
-                    'filter' => "(system='{$systemId}')",
-                    'sort' => '-created',
-                    'perPage' => 1,
-                ]);
+            try {
+                $stats = $this->authedGet($token, $perCall)
+                    ->get("{$hubUrl}/api/collections/system_stats/records", [
+                        'filter' => "(system='{$systemId}')",
+                        'sort' => '-created',
+                        'perPage' => 1,
+                    ]);
+            } catch (ConnectionException $e) {
+                return ProbeResult::down("Beszel hub unreachable during stats query at {$hubUrl} after {$perCall}s (check hub reachability or raise timeout_seconds): ".$e->getMessage());
+            }
             if ($stats->failed()) {
                 return ProbeResult::down("Beszel stats query failed: HTTP {$stats->status()} ".Str::limit((string) $stats->body(), 300));
             }
-            $record = $stats->json('items.0', []);
-            $systemData = $system->json();
+            $record = $stats->json('items.0.stats', []);
+            $info = is_array($systemData['info'] ?? null) ? $systemData['info'] : [];
             $metrics = [
                 'agent_status' => $systemData['status'] ?? 'unknown',
-                'cpu_pct' => (float) ($record['cpu'] ?? 0),
-                'mem_pct' => (float) ($record['memory'] ?? 0),
-                'mem_used_gb' => (float) ($record['memory_used'] ?? 0),
-                'mem_total_gb' => (float) ($record['memory_total'] ?? 0),
-                'disk_pct' => (float) ($record['disk'] ?? 0),
-                'disk_used_gb' => (float) ($record['disk_used'] ?? 0),
-                'disk_total_gb' => (float) ($record['disk_total'] ?? 0),
-                'containers_running' => (int) ($record['containers'] ?? 0),
-                'containers_unhealthy' => (int) ($record['containers_unhealthy'] ?? 0),
+                'cpu_pct' => (float) ($record['cpu'] ?? $info['cpu'] ?? 0),
+                'mem_pct' => (float) ($record['mp'] ?? $info['mp'] ?? 0),
+                'mem_used_gb' => (float) ($record['mu'] ?? 0),
+                'mem_total_gb' => (float) ($record['m'] ?? 0),
+                'disk_pct' => (float) ($record['dp'] ?? $info['dp'] ?? 0),
+                'disk_used_gb' => (float) ($record['du'] ?? 0),
+                'disk_total_gb' => (float) ($record['d'] ?? 0),
+                'containers_running' => (int) ($info['ct'] ?? 0),
+                'containers_unhealthy' => 0,
             ];
 
             // Threshold-based DEGRADED classification
@@ -94,31 +117,41 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
             if ($metrics['disk_pct'] >= $warnDisk) {
                 $breaches[] = "DISK {$metrics['disk_pct']}%";
             }
-            if ($metrics['containers_unhealthy'] > 0) {
-                $breaches[] = "{$metrics['containers_unhealthy']} unhealthy container(s)";
-            }
 
             if (! empty($breaches)) {
                 return ProbeResult::degraded(null, $metrics, 'Threshold breach: '.implode(', ', $breaches));
             }
 
             return ProbeResult::up(null, $metrics);
-        } catch (ConnectionException $e) {
-            return ProbeResult::down("Beszel hub unreachable at {$hubUrl}: ".$e->getMessage());
         } catch (\Throwable $e) {
             return ProbeResult::down("Beszel probe error at {$hubUrl}: ".$e->getMessage());
         }
     }
 
     /**
-     * Build an authorized GET prelude: PocketBase takes the raw token in the
-     * Authorization header (no Bearer prefix), and every call carries the probe
-     * timeout. docs: Authorization:YOUR_AUTH_TOKEN
+     * Shared budget: timeout_seconds splits across sequential calls so the
+     * total stays inside the target timeout. Minimum 2s per call.
      */
-    private function authedGet(string $token): \Illuminate\Http\Client\PendingRequest
+    private function callBudget(int $calls): int
+    {
+        return max(2, (int) ceil($this->timeoutSeconds / max(1, $calls)));
+    }
+
+    private function connectBudget(int $perCall): int
+    {
+        return min(3, $perCall);
+    }
+
+    /**
+     * Build an authorized GET prelude: PocketBase takes the raw token in the
+     * Authorization header (no Bearer prefix), and every call carries its share
+     * of the probe timeout. docs: Authorization:YOUR_AUTH_TOKEN
+     */
+    private function authedGet(string $token, int $perCall): \Illuminate\Http\Client\PendingRequest
     {
         return Http::withHeaders(['Authorization' => $token])
-            ->timeout($this->timeoutSeconds);
+            ->connectTimeout($this->connectBudget($perCall))
+            ->timeout($perCall);
     }
 
     /**
@@ -128,7 +161,7 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
      *
      * @return array{token: ?string, error: ?string}
      */
-    private function authToken(string $hubUrl): array
+    private function authToken(string $hubUrl, int $perCall): array
     {
         // Static API token: no login call, no cache.
         $apiToken = (string) $this->credential('api_token', '');
@@ -153,7 +186,7 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
             ];
         }
 
-        $response = Http::timeout($this->timeoutSeconds)
+        $response = Http::connectTimeout($this->connectBudget($perCall))->timeout($perCall)
             ->post("{$hubUrl}/api/collections/users/auth-with-password", [
                 'identity' => $email,
                 'password' => $password,

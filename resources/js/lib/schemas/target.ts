@@ -55,7 +55,7 @@ export const internetSchema = z.object({
 });
 
 export const beszelSchema = z.object({
-    beszel_system_id: z.string().min(1),
+    beszel_system_name: z.string().min(1),
     warn_cpu_pct: z.coerce.number().int().default(85),
     warn_mem_pct: z.coerce.number().int().default(90),
     warn_disk_pct: z.coerce.number().int().default(85),
