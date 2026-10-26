@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# Local secrets — never commit (root + frontend dev envs)
+.env
+frontend/.env
+# Build outputs
+frontend/dist/
+backend/api
+data/

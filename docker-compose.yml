@@ -1,0 +1,144 @@
+# ---------------------------------------------------------------------------
+# Full: frontend + backend + postgres + redis + gotenberg (all-in-one).
+# Usage: docker compose up --build
+# Slim variant (external DB/Redis): docker compose -f docker-compose.slim.yml up --build
+# ---------------------------------------------------------------------------
+services:
+  # Nginx serving the built React SPA — the only public web entrypoint on :80
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Full API base URL incl. /api/v1 — used verbatim as axios baseURL.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080/api/v1}
+    container_name: opslira-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Go API — auth, CRUD, probes, reports, and all periodic work in one binary.
+  # The scheduler runs in-process (probe ticks, report dispatch, daily
+  # rollup/prune), so there is no separate runner service.
+  # NET_RAW required for ICMP ping probes, which run inside this container.
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: opslira-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    cap_add:
+      - NET_RAW
+    environment:
+      API_LISTEN_ADDR: ${API_LISTEN_ADDR:-:8080}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DB_DATABASE: ${DB_DATABASE:-internal_monitoring}
+      DB_USERNAME: ${DB_USERNAME:-mon_admin}
+      DB_PASSWORD: ${DB_PASSWORD:-change-me-strong-password}
+      DB_SSLMODE: ${DB_SSLMODE:-disable}
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_CACHE_DB: ${REDIS_CACHE_DB:-1}
+      GOTENBERG_URL: http://gotenberg:3000
+      REPORT_STORAGE_DIR: ${REPORT_STORAGE_DIR:-/data/reports}
+      REPORT_S3_ENDPOINT: ${REPORT_S3_ENDPOINT:-}
+      REPORT_S3_BUCKET: ${REPORT_S3_BUCKET:-}
+      REPORT_S3_ACCESS_KEY: ${REPORT_S3_ACCESS_KEY:-}
+      REPORT_S3_SECRET_KEY: ${REPORT_S3_SECRET_KEY:-}
+      REPORT_S3_REGION: ${REPORT_S3_REGION:-us-east-1}
+      REPORT_S3_PREFIX: ${REPORT_S3_PREFIX:-opslira-reports}
+      APP_KEY: ${APP_KEY:-}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+      # Shared secret for internal runner endpoints; required.
+      OPSLIRA_RUNNER_TOKEN: ${OPSLIRA_RUNNER_TOKEN:-}
+      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-8}
+      RUNNER_TICK_SECONDS: ${RUNNER_TICK_SECONDS:-15}
+      REPORT_TICK_SECONDS: ${REPORT_TICK_SECONDS:-60}
+      ROLLUP_AT: ${ROLLUP_AT:-00:05}
+      PRUNE_AT: ${PRUNE_AT:-02:00}
+      RUNNER_TIMEZONE: ${RUNNER_TIMEZONE:-Asia/Jakarta}
+      # Comma-separated incident alert recipients
+      ALERT_RECIPIENTS: ${ALERT_RECIPIENTS:-}
+      MAIL_MAILER: ${MAIL_MAILER:-smtp}
+      MAIL_HOST: ${MAIL_HOST:-}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-Opslira Monitoring}
+      # smtps for implicit TLS on 465; 587 uses STARTTLS
+      MAIL_SCHEME: ${MAIL_SCHEME:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@opslira.local}
+      ADMIN_NAME: ${ADMIN_NAME:-Opslira Super Admin}
+      # Production seed: superadmin only, and only when set. Empty =
+      # dev seed (4 users / 8 targets / 3 schedules) instead.
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      BESZEL_TOKEN_CACHE_TTL: ${BESZEL_TOKEN_CACHE_TTL:-43200}
+    volumes:
+      - report_storage:/data/reports
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      gotenberg:
+        condition: service_started
+
+  # PostgreSQL 16 — partitioned log storage
+  postgres:
+    image: postgres:16-alpine
+    container_name: opslira-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-internal_monitoring}
+      POSTGRES_USER: ${DB_USERNAME:-mon_admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me-strong-password}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-mon_admin} -d ${DB_DATABASE:-internal_monitoring}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 7 — sessions + state cache (AOF on)
+  redis:
+    image: redis:7-alpine
+    container_name: opslira-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Gotenberg — headless Chromium HTML→PDF
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: opslira-gotenberg
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  redis_data:
+  report_storage:
