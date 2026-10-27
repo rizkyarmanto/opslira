@@ -40,6 +40,9 @@ return Application::configure(basePath: dirname(__DIR__))
         },
     )
     ->withMiddleware(function (Middleware $middleware) {
+        // App HTTP di belakang HAProxy HTTPS: percaya X-Forwarded-Proto
+        // agar $request->isSecure() true dan @vite hasilkan URL https.
+        $middleware->trustProxies(at: '*');
         $middleware->alias([
             'super_admin' => EnsureSuperAdmin::class,
             'runner' => EnsureRunnerToken::class,
