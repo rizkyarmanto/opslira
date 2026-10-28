@@ -14,6 +14,12 @@ use Inertia\Response;
 
 class DashboardController
 {
+    /** Bucket width of the 24 h traffic chart. */
+    private const TRAFFIC_BUCKET_MINUTES = 5;
+
+    /** Devices drawn on the traffic chart before the list is shortened. */
+    private const TRAFFIC_DEVICE_LIMIT = 6;
+
     public function __construct(private readonly SlaDashboardService $sla, private readonly TargetStateService $state)
     {
     }
@@ -87,7 +93,7 @@ class DashboardController
         return Inertia::render('Dashboard/NetworkDashboard', [
             'targets' => $this->decorateTargets($targets, true),
             'internetTargets' => $this->decorateTargets($targets->where('target_type', 'INTERNET')->values(), true),
-            'trafficSummary' => $this->trafficSummary($targets),
+            'trafficSeries' => $this->trafficSeries($targets),
         ]);
     }
 
@@ -329,21 +335,107 @@ class DashboardController
             ->all();
     }
     /**
-     * Aggregate SNMP traffic (rx/tx) for the area chart.
+     * SNMP traffic per device over the last 24 hours, bucketed to five minutes.
+     * Numbers come from monitoring_logs, so a bucket the probe never filled stays
+     * null and the chart shows a gap instead of a line drawn through it.
+     *
+     * @return array{times: array<int, string>, devices: array<int, array<string, mixed>>, total: int, truncated: bool}
      */
-    private function trafficSummary($targets): array
+    private function trafficSeries($targets): array
     {
-        return $targets
-            ->mapWithKeys(function (MonitoringTarget $target) {
-                $metrics = $this->state->get($target->id)['summary_metrics'] ?? [];
+        $bucketMinutes = self::TRAFFIC_BUCKET_MINUTES;
+        $now = now()->setTimezone(config('app.timezone'));
 
-                return [
-                    $target->name => [
-                        'rx_mbps' => $metrics['rx_mbps'] ?? 0,
-                        'tx_mbps' => $metrics['tx_mbps'] ?? 0,
-                    ],
-                ];
-            })
-            ->all();
+        // A rolling 24 h window on a five-minute grid, so every label lands on a
+        // boundary and the newest point is the bucket still in progress.
+        $windowEnd = $now->copy()->startOfMinute();
+        $windowEnd->setTime(
+            (int) $windowEnd->format('G'),
+            (int) $windowEnd->format('i') - ((int) $windowEnd->format('i') % $bucketMinutes),
+        );
+        $windowStart = $windowEnd->copy()->subDay();
+
+        $buckets = [];
+        $labels = [];
+
+        for ($cursor = $windowStart->copy(); $cursor->lessThanOrEqualTo($windowEnd); $cursor->addMinutes($bucketMinutes)) {
+            $buckets[] = $cursor->format('Y-m-d\TH:i');
+            $labels[] = $cursor->format('H:i');
+        }
+
+        $targetIds = $targets->pluck('id')->all();
+
+        if ($targetIds === []) {
+            return ['times' => $labels, 'devices' => [], 'total' => 0, 'truncated' => false];
+        }
+
+        // Buckets are cut in the app timezone and rendered as a sortable key, so a
+        // session or server timezone setting cannot shift a point to another hour.
+        $bucketExpression = "to_char(date_bin(INTERVAL '{$bucketMinutes} minutes', checked_at AT TIME ZONE 'Asia/Jakarta', TIMESTAMP '2000-01-01'), 'YYYY-MM-DD\"T\"HH24:MI')";
+
+        $rows = DB::table('monitoring_logs')
+            ->selectRaw("target_id, {$bucketExpression} AS bucket, avg((metrics_payload->>'rx_mbps')::numeric) AS rx, avg((metrics_payload->>'tx_mbps')::numeric) AS tx")
+            ->whereIn('target_id', $targetIds)
+            // An ISO string keeps the bound absolute; a formatted datetime would be
+            // read in the connection's timezone and move the window by its offset.
+            ->where('checked_at', '>=', $windowStart->toIso8601String())
+            ->whereRaw("(metrics_payload->>'rx_mbps') IS NOT NULL OR (metrics_payload->>'tx_mbps') IS NOT NULL")
+            ->groupByRaw("target_id, {$bucketExpression}")
+            ->get();
+
+        $bucketIndex = array_flip($buckets);
+        $byTarget = [];
+
+        foreach ($rows as $row) {
+            $index = $bucketIndex[$row->bucket] ?? null;
+
+            if ($index === null) {
+                continue;
+            }
+
+            $byTarget[(string) $row->target_id][$index] = [
+                'rx' => $row->rx === null ? null : round((float) $row->rx, 3),
+                'tx' => $row->tx === null ? null : round((float) $row->tx, 3),
+            ];
+        }
+
+        $devices = [];
+
+        foreach ($targets as $target) {
+            $readings = $byTarget[(string) $target->id] ?? null;
+
+            if ($readings === null) {
+                continue;
+            }
+
+            $rx = array_fill(0, count($buckets), null);
+            $tx = array_fill(0, count($buckets), null);
+            $peak = 0.0;
+
+            foreach ($readings as $index => $values) {
+                $rx[$index] = $values['rx'];
+                $tx[$index] = $values['tx'];
+                $peak = max($peak, (float) $values['rx'], (float) $values['tx']);
+            }
+
+            $devices[] = ['name' => $target->name, 'rx' => $rx, 'tx' => $tx, 'peak_mbps' => $peak];
+        }
+
+        // Busiest first, so a shortened list keeps the devices that answer the
+        // question the chart asks.
+        usort($devices, fn (array $a, array $b) => [$b['peak_mbps'], $a['name']] <=> [$a['peak_mbps'], $b['name']]);
+
+        $total = count($devices);
+        $devices = array_slice($devices, 0, self::TRAFFIC_DEVICE_LIMIT);
+
+        return [
+            'times' => $labels,
+            'devices' => array_map(
+                fn (array $device) => ['name' => $device['name'], 'rx' => $device['rx'], 'tx' => $device['tx']],
+                $devices,
+            ),
+            'total' => $total,
+            'truncated' => $total > self::TRAFFIC_DEVICE_LIMIT,
+        ];
     }
 }

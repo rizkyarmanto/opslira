@@ -11,36 +11,43 @@ import { relativeTime } from '@/lib/time';
 import { usePolling } from '@/lib/usePolling';
 import type { MonitoringTarget } from '@/types/monitoring';
 
+interface TrafficDevice {
+    name: string;
+    rx: Array<number | null>;
+    tx: Array<number | null>;
+}
+
 interface Props {
     targets: MonitoringTarget[];
     internetTargets: MonitoringTarget[];
-    trafficSummary: Record<string, { rx_mbps: number; tx_mbps: number }>;
+    trafficSeries: {
+        times: string[];
+        devices: TrafficDevice[];
+        total: number;
+        truncated: boolean;
+    };
 }
 
 /**
- * Network view. The question this screen answers: are the office links carrying
- * traffic, and which device is not? The chart is titled with that question, and a
- * device with no SNMP reading says so instead of drawing a flat line at zero
- * (C-3, R-17).
+ * Network view. The question this screen answers: which device carried traffic in
+ * the last day, and which one went quiet? The chart is titled with that question,
+ * and a five-minute bucket no probe filled is a gap rather than a line drawn at
+ * zero (C-3, R-17).
  */
-export default function NetworkDashboard({ targets, internetTargets, trafficSummary }: Props) {
-    const { lastUpdated, refreshing } = usePolling(['targets', 'trafficSummary']);
+export default function NetworkDashboard({ targets, internetTargets, trafficSeries }: Props) {
+    const { lastUpdated, refreshing } = usePolling(['targets', 'trafficSeries']);
 
     // The traffic chart reads SNMP from devices only, so Internet hosts are split
     // out before the chart and rendered as their own section below.
     const devices = targets.filter((t) => t.target_type !== 'INTERNET');
     const internet = internetTargets;
 
-    const deviceNames = new Set(devices.map((d) => d.name));
-    const series = Object.entries(trafficSummary).filter(
-        ([name, v]) => deviceNames.has(name) && (v.rx_mbps > 0 || v.tx_mbps > 0),
-    );
-    const names = series.map(([name]) => name);
-    const hasTraffic = series.length > 0;
+    const { times, devices: trafficDevices, total: trafficTotal, truncated: trafficTruncated } = trafficSeries;
+    const hasTraffic = trafficDevices.length > 0;
 
     const trafficOption = {
         backgroundColor: 'transparent',
-        grid: { left: 48, right: 20, top: 36, bottom: 36 },
+        grid: { left: 52, right: 20, top: 44, bottom: 34 },
         tooltip: {
             trigger: 'axis',
             backgroundColor: '#131316',
@@ -48,16 +55,17 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
             textStyle: { color: '#f4f4f5', fontSize: 12 },
         },
         legend: {
-            data: ['In', 'Out'],
             textStyle: { color: '#a1a1aa', fontSize: 11 },
             top: 0,
+            type: 'scroll',
             icon: 'roundRect',
         },
         xAxis: {
             type: 'category',
-            data: names,
+            data: times,
+            boundaryGap: false,
             axisLine: { lineStyle: { color: '#3f3f46' } },
-            axisLabel: { color: '#a1a1aa', fontSize: 10, interval: 0, rotate: names.length > 4 ? 20 : 0 },
+            axisLabel: { color: '#a1a1aa', fontSize: 10, hideOverlap: true },
         },
         yAxis: {
             type: 'value',
@@ -66,26 +74,30 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
             axisLabel: { color: '#a1a1aa', fontSize: 10 },
             splitLine: { lineStyle: { color: '#27272a' } },
         },
-        series: [
+        // One line per device and direction: In reads the receive counter, Out the
+        // transmit counter, both averaged into the same five-minute bucket.
+        series: trafficDevices.flatMap((device) => [
             {
-                name: 'In',
+                name: `${device.name} in`,
                 type: 'line',
                 smooth: true,
-                symbolSize: 5,
-                data: series.map(([, v]) => v.rx_mbps),
+                showSymbol: false,
+                connectNulls: false,
+                data: device.rx,
                 itemStyle: { color: '#34d399' },
-                lineStyle: { color: '#34d399' },
+                lineStyle: { color: '#34d399', width: 1.5 },
             },
             {
-                name: 'Out',
+                name: `${device.name} out`,
                 type: 'line',
                 smooth: true,
-                symbolSize: 5,
-                data: series.map(([, v]) => v.tx_mbps),
+                showSymbol: false,
+                connectNulls: false,
+                data: device.tx,
                 itemStyle: { color: '#38bdf8' },
-                lineStyle: { color: '#38bdf8' },
+                lineStyle: { color: '#38bdf8', width: 1.5 },
             },
-        ],
+        ]),
     };
 
     return (
@@ -109,13 +121,20 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
 
             <Card className="mb-6 px-4 py-4">
                 <h2 className="text-sm font-semibold text-noc-text">
-                    Traffic per device, latest SNMP reading
+                    Traffic per device, last 24 hours
                 </h2>
                 {hasTraffic ? (
-                    <ReactECharts option={trafficOption} style={{ height: 260 }} />
+                    <>
+                        <ReactECharts option={trafficOption} style={{ height: 280 }} />
+                        {trafficTruncated && (
+                            <p className="mt-1 text-[10px] text-noc-muted">
+                                Showing {trafficDevices.length} of {trafficTotal} devices that reported traffic.
+                            </p>
+                        )}
+                    </>
                 ) : (
                     <p className="py-8 text-center text-sm text-noc-muted">
-                        No SNMP readings yet. Numbers appear after the network probe runs and the device
+                        No SNMP readings in the last 24 hours. Numbers appear after a network probe
                         returns interface data.
                     </p>
                 )}
