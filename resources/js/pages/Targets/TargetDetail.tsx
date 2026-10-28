@@ -305,21 +305,22 @@ function TargetFacts({ target }: { target: Props['target'] }) {
                 </>
             );
 
-            // A router and a switch answer different SNMP objects: the router adds
-            // health sensors and PPP tunnels, the switch adds PoE ports (R-17, C-3).
+            // A router answers hardware sensor OIDs that a switch does not, so only
+            // the router carries that block; both share identity and reachability.
             if (subType === 'ROUTER' || subType === 'SWITCH') {
                 return (
                     <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                         {identity}
                         {reachability}
                         {subType === 'ROUTER' && (
-                            <div className="space-y-2 sm:col-span-2">
-                                <ProgressBar label="CPU" value={num(m.cpu_usage_pct)} />
-                                <ProgressBar label="Memory" value={num(m.mem_usage_pct)} />
-                            </div>
+                            <>
+                                <div className="space-y-2 sm:col-span-2">
+                                    <ProgressBar label="CPU" value={num(m.cpu_usage_pct)} />
+                                    <ProgressBar label="Memory" value={num(m.mem_usage_pct)} />
+                                </div>
+                                <RouterSensors metrics={m} />
+                            </>
                         )}
-                        <DevicePorts metrics={m} />
-                        {subType === 'ROUTER' ? <RouterExtras metrics={m} /> : <SwitchPoe metrics={m} />}
                     </div>
                 );
             }
@@ -445,70 +446,6 @@ function TargetFacts({ target }: { target: Props['target'] }) {
     }
 }
 
-/** Interfaces listed per device before the list is cut short with a note. */
-const DISPLAYED_PORTS = 24;
-
-type InterfaceRow = {
-    if_index: number;
-    name: string;
-    oper: string | null;
-    speed_mbps: number | null;
-    rx_mbps: number | null;
-    tx_mbps: number | null;
-};
-
-type PoePortRow = {
-    pse: string;
-    detection: string | null;
-};
-
-/** summary_metrics.ports arrives as JSON; keep only rows the chip can render. */
-function interfaceRows(value: unknown): InterfaceRow[] {
-    if (!Array.isArray(value)) {
-        return [];
-    }
-
-    return value.flatMap((row) => {
-        if (typeof row !== 'object' || row === null) {
-            return [];
-        }
-
-        const raw = row as Record<string, unknown>;
-        const name = str(raw.name);
-        const ifIndex = num(raw.if_index);
-
-        return name === null || ifIndex === null
-            ? []
-            : [
-                  {
-                      if_index: ifIndex,
-                      name,
-                      oper: str(raw.oper),
-                      speed_mbps: num(raw.speed_mbps),
-                      rx_mbps: num(raw.rx_mbps),
-                      tx_mbps: num(raw.tx_mbps),
-                  },
-              ];
-    });
-}
-
-function poePortRows(value: unknown): PoePortRow[] {
-    if (!Array.isArray(value)) {
-        return [];
-    }
-
-    return value.flatMap((row) => {
-        if (typeof row !== 'object' || row === null) {
-            return [];
-        }
-
-        const raw = row as Record<string, unknown>;
-        const pse = str(raw.pse) ?? (num(raw.pse) !== null ? String(num(raw.pse)) : null);
-
-        return pse === null ? [] : [{ pse, detection: str(raw.detection) }];
-    });
-}
-
 function truncate(value: string, limit: number): string {
     return value.length <= limit ? value : `${value.slice(0, limit - 1)}...`;
 }
@@ -548,159 +485,28 @@ function DeviceIdentity({ metrics }: { metrics: Record<string, unknown> }) {
     );
 }
 
-/** Interface table: counts first, then the ports themselves. */
-function DevicePorts({ metrics }: { metrics: Record<string, unknown> }) {
-    const ports = interfaceRows(metrics.ports);
-    const shown = ports.slice(0, DISPLAYED_PORTS);
-    const total = num(metrics.ports_total);
-    const up = num(metrics.ports_up);
-    const down = num(metrics.ports_down);
-
-    return (
-        <div className="space-y-2 sm:col-span-2">
-            <p className="field-label">Ports</p>
-            {total === null ? (
-                <NoData />
-            ) : (
-                <p className="tabular text-sm font-semibold text-noc-text">
-                    {up ?? 0} up, {down ?? 0} down of {total}
-                </p>
-            )}
-            {shown.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                    {shown.map((port) => (
-                        <InterfaceChip key={port.if_index} port={port} />
-                    ))}
-                </div>
-            )}
-            {(metrics.ports_truncated === true || ports.length > shown.length) && (
-                <p className="text-[10px] text-noc-muted">
-                    Showing the first {shown.length} of {total ?? ports.length} interfaces.
-                </p>
-            )}
-        </div>
-    );
-}
-
-/** Router-only facts: hardware sensors and PPP tunnels. */
-function RouterExtras({ metrics }: { metrics: Record<string, unknown> }) {
+/** Router-only facts: hardware sensors. */
+function RouterSensors({ metrics }: { metrics: Record<string, unknown> }) {
     const temperature = num(metrics.sensor_temp_c);
     const voltage = num(metrics.sensor_voltage_v);
-    const tunnelsUp = num(metrics.ppp_tunnels_up);
-    const tunnelsTotal = num(metrics.ppp_tunnels_total);
+
+    if (metrics.sensor_supported !== true) {
+        return (
+            <Fact label="Hardware sensors">
+                <NoData />
+            </Fact>
+        );
+    }
 
     return (
         <>
-            {metrics.sensor_supported === true ? (
-                <>
-                    <Fact label="Temperature">
-                        {temperature === null ? <NoData /> : `${temperature.toFixed(1)} C`}
-                    </Fact>
-                    <Fact label="Voltage">
-                        {voltage === null ? <NoData /> : `${voltage.toFixed(1)} V`}
-                    </Fact>
-                </>
-            ) : (
-                <Fact label="Hardware sensors">
-                    <NoData />
-                </Fact>
-            )}
-            <Fact label="PPP tunnels">
-                {tunnelsTotal === null ? <NoData /> : `${tunnelsUp ?? 0} up of ${tunnelsTotal}`}
+            <Fact label="Temperature">
+                {temperature === null ? <NoData /> : `${temperature.toFixed(1)} C`}
+            </Fact>
+            <Fact label="Voltage">
+                {voltage === null ? <NoData /> : `${voltage.toFixed(1)} V`}
             </Fact>
         </>
-    );
-}
-
-/** Switch-only facts: PoE ports, or an honest empty state when the device has none. */
-function SwitchPoe({ metrics }: { metrics: Record<string, unknown> }) {
-    const allPorts = poePortRows(metrics.poe_ports);
-    const ports = allPorts.slice(0, DISPLAYED_PORTS);
-    const powered = num(metrics.poe_ports_powered);
-    const total = num(metrics.poe_ports_total);
-    const budget = num(metrics.poe_total_watts);
-
-    return (
-        <div className="space-y-2 sm:col-span-2">
-            <p className="field-label">PoE</p>
-            {metrics.poe_supported !== true ? (
-                <p className="text-xs text-noc-muted">This device does not report PoE.</p>
-            ) : (
-                <>
-                    {total !== null && total > 0 ? (
-                        <p className="tabular text-sm font-semibold text-noc-text">
-                            {powered ?? 0} powered of {total}
-                        </p>
-                    ) : (
-                        <p className="text-xs text-noc-muted">
-                            This device reports PoE power but not state per port.
-                        </p>
-                    )}
-                    {budget !== null && (
-                        <p className="tabular text-[11px] text-noc-muted">PoE budget {budget} W</p>
-                    )}
-                    {ports.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                            {ports.map((port) => (
-                                <PoeChip key={port.pse} port={port} />
-                            ))}
-                        </div>
-                    )}
-                    {(metrics.poe_truncated === true || allPorts.length > ports.length) && (
-                        <p className="text-[10px] text-noc-muted">
-                            Showing the first {ports.length} of {total ?? 0} PoE ports.
-                        </p>
-                    )}
-                </>
-            )}
-        </div>
-    );
-}
-
-function InterfaceChip({ port }: { port: InterfaceRow }) {
-    const checked = port.oper !== null;
-    const up = port.oper === 'up';
-    const classes = !checked
-        ? 'border-noc-border text-noc-muted'
-        : up
-          ? 'border-status-up/30 bg-status-up/10 text-status-up'
-          : 'border-status-down/40 bg-status-down/10 text-status-down';
-
-    const details: string[] = [];
-
-    if (port.speed_mbps !== null && port.speed_mbps > 0) {
-        details.push(`${port.speed_mbps} Mbps`);
-    }
-
-    if (port.rx_mbps !== null && port.tx_mbps !== null) {
-        details.push(`rx ${port.rx_mbps} tx ${port.tx_mbps} Mbps`);
-    }
-
-    return (
-        <span className={`tabular inline-flex items-center gap-1.5 rounded-xs border px-2 py-0.5 text-[11px] ${classes}`}>
-            <span className="font-semibold">{port.name}</span>
-            <span>{!checked ? 'not yet checked' : up ? 'up' : 'down'}</span>
-            {details.length > 0 && <span className="text-noc-muted">{details.join(' / ')}</span>}
-        </span>
-    );
-}
-
-/** Detection state carries the color, the word carries the meaning. */
-const POE_STATE_CLASSES: Record<string, string> = {
-    delivering: 'border-status-up/30 bg-status-up/10 text-status-up',
-    searching: 'border-status-degraded/40 bg-status-degraded/10 text-status-degraded',
-    fault: 'border-status-down/40 bg-status-down/10 text-status-down',
-    other_fault: 'border-status-down/40 bg-status-down/10 text-status-down',
-};
-
-function PoeChip({ port }: { port: PoePortRow }) {
-    const state = port.detection ?? 'unknown';
-    const classes = POE_STATE_CLASSES[state] ?? 'border-noc-border text-noc-muted';
-
-    return (
-        <span className={`tabular inline-flex items-center rounded-xs border px-2 py-0.5 text-[11px] ${classes}`}>
-            {port.pse}: {state.replace('_', ' ')}
-        </span>
     );
 }
 
