@@ -363,6 +363,10 @@ function DynamicFields({
                 ],
             },
             { key: 'icmp_count', label: 'ICMP packet count', type: 'number' },
+            // The adapter skips every SNMP walk unless this is on, so without a
+            // field here a NETWORK_DEVICE target can never report identity, ports,
+            // sensors, PPP or PoE.
+            { key: 'enable_snmp', label: 'Collect SNMP metrics', type: 'checkbox' },
         ],
         INTERNET: [{ key: 'icmp_count', label: 'ICMP packet count', type: 'number' }],
         WEB_APP: [
@@ -586,6 +590,7 @@ const credentialFieldsByChoice: Record<CredentialChoice, Array<{ key: string; la
 };
 
 const credentialHelperByType: Partial<Record<TargetType, string>> = {
+    NETWORK_DEVICE: 'SNMP metrics need an SNMP community string, or a v3 user with auth and priv. Without credentials the probe still pings, and reports the device as SNMP unavailable.',
     DATABASE: 'Use a read-only monitoring account, not root. For replication lag monitoring the account needs REPLICATION CLIENT.',
     S3_STORAGE: 'Use an IAM user with read-only access (HeadBucket, ListObjects), not a root key.',
     BESZEL_SERVER: 'Use a Beszel regular user added to the system, or an API token.',

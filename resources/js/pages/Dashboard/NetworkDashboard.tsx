@@ -143,6 +143,7 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                         {devices.map((target) => {
                             const metrics = (target.state?.summary_metrics ?? {}) as Record<string, number>;
+                            const counts = deviceCounts(target.config_payload?.sub_type, metrics);
 
                             return (
                                 <Link key={target.id} href={`/targets/${target.id}`} className="block rounded-md transition-colors hover:border-noc-muted focus-visible:outline-2 focus-visible:outline-noc-accent" aria-label={`View details for ${target.name}`}>
@@ -196,6 +197,10 @@ export default function NetworkDashboard({ targets, internetTargets, trafficSumm
                                         <ProgressBar label="CPU" value={metrics.cpu_usage_pct ?? null} />
                                         <ProgressBar label="Memory" value={metrics.mem_usage_pct ?? null} />
                                     </div>
+
+                                    {counts !== null && (
+                                        <p className="tabular mt-2 text-[10px] text-noc-muted">{counts}</p>
+                                    )}
                                 </StatusCard>
                                 </Link>
                             );
@@ -318,4 +323,49 @@ function ProgressBar({ label, value }: { label: string; value: number | null }) 
             </div>
         </div>
     );
+}
+
+/**
+ * One muted line naming the counters this device's probe actually produces: a
+ * router reports PPP tunnels, a switch reports PoE. A device that has none of
+ * them shows no line at all, never a zero (R-17).
+ */
+function deviceCounts(subType: unknown, metrics: Record<string, unknown>): string | null {
+    const count = (key: string): number | null => {
+        const value = metrics[key];
+
+        return typeof value === 'number' && Number.isFinite(value) ? value : null;
+    };
+
+    const parts: string[] = [];
+
+    if (subType === 'ROUTER') {
+        const up = count('ppp_tunnels_up');
+        const total = count('ppp_tunnels_total');
+
+        if (up !== null && total !== null) {
+            parts.push(`PPP ${up}/${total}`);
+        }
+    }
+
+    if (subType === 'SWITCH') {
+        const powered = count('poe_ports_powered');
+        const total = count('poe_ports_total');
+
+        // A device can report PoE power without the per-port table (HP 2530); a
+        // placeholder 0/0 would read as "no port is powered", which is a claim
+        // the probe never measured. Only a real per-port count earns the line.
+        if (powered !== null && total !== null && total > 0) {
+            parts.push(`PoE ${powered}/${total}`);
+        }
+    }
+
+    const portsUp = count('ports_up');
+    const portsTotal = count('ports_total');
+
+    if (portsUp !== null && portsTotal !== null) {
+        parts.push(`Port ${portsUp}/${portsTotal}`);
+    }
+
+    return parts.length === 0 ? null : parts.join(' · ');
 }

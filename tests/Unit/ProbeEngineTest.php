@@ -69,6 +69,76 @@ it('returns no snmpget arguments when no credentials are configured', function (
     expect($adapter->snmpCommandArguments('10.0.0.1'))->toBe([]);
 });
 
+it('builds snmpget arguments for several oids with quick numeric output', function () {
+    $adapter = (new NetworkSnmpProbeAdapter())
+        ->configure(['enable_snmp' => true, 'host' => '192.168.10.1'], ['community' => 'solusnmp']);
+
+    expect($adapter->snmpGetArguments('192.168.10.1', ['1.3.6.1.2.1.1.1.0', '1.3.6.1.2.1.1.5.0']))->toBe([
+        'snmpget', '-v', '2c', '-c', 'solusnmp',
+        '-t', '5', '-r', '1', '-Oqn',
+        '192.168.10.1', '1.3.6.1.2.1.1.1.0', '1.3.6.1.2.1.1.5.0',
+    ]);
+});
+
+it('builds snmpwalk arguments for a table base oid', function () {
+    $adapter = (new NetworkSnmpProbeAdapter())
+        ->configure(['enable_snmp' => true, 'host' => '192.168.200.6'], ['community' => 'monitoring']);
+
+    expect($adapter->snmpWalkArguments('192.168.200.6', '1.3.6.1.2.1.2.2.1.2'))->toBe([
+        'snmpwalk', '-v', '2c', '-c', 'monitoring',
+        '-t', '5', '-r', '1', '-Oqn',
+        '192.168.200.6', '1.3.6.1.2.1.2.2.1.2',
+    ]);
+});
+
+it('reads oid values from typed and quick snmp output', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+    $output = implode("\n", [
+        '.1.3.6.1.2.1.1.1.0 STRING: MikroTik RouterOS 7.15.3 (stable)',
+        '.1.3.6.1.2.1.1.3.0 Timeticks: (123456789) 14 days, 6:56:07.89',
+        '.1.3.6.1.2.1.2.2.1.8.1 INTEGER: 1',
+        '.1.3.6.1.2.1.31.1.1.1.15.1 1000',
+        '',
+    ]);
+
+    expect($adapter->parseSnmpLines($output))->toBe([
+        '1.3.6.1.2.1.1.1.0' => 'MikroTik RouterOS 7.15.3 (stable)',
+        '1.3.6.1.2.1.1.3.0' => '(123456789) 14 days, 6:56:07.89',
+        '1.3.6.1.2.1.2.2.1.8.1' => '1',
+        '1.3.6.1.2.1.31.1.1.1.15.1' => '1000',
+    ])->and($adapter->snmpUptimeSeconds('(123456789) 14 days, 6:56:07.89'))->toBe(1234567)
+        ->and($adapter->snmpUptimeSeconds('123456789'))->toBe(1234567)
+        ->and($adapter->snmpUptimeSeconds(null))->toBeNull();
+});
+
+it('turns two counter readings into a rate per interface', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+
+    // 1 MB in 10 s is 0.8 Mbps; 0.5 MB is 0.4 Mbps
+    $rates = $adapter->counterDeltas(
+        ['1' => ['in' => 1_000_000, 'out' => 2_000_000, 'at' => 1000.0]],
+        ['1' => ['in' => 2_000_000, 'out' => 2_500_000]],
+        1010.0,
+    );
+
+    expect($rates)->toBe(['1' => ['rx_mbps' => 0.8, 'tx_mbps' => 0.4]]);
+});
+
+it('returns a null rate when the counter reset or has no baseline', function () {
+    $adapter = new NetworkSnmpProbeAdapter();
+
+    $reset = $adapter->counterDeltas(
+        ['1' => ['in' => 5_000_000, 'out' => 1, 'at' => 1000.0]],
+        ['1' => ['in' => 10, 'out' => null]],
+        1010.0,
+    );
+
+    $noBaseline = $adapter->counterDeltas([], ['1' => ['in' => 10, 'out' => 20]], 1010.0);
+
+    expect($reset)->toBe(['1' => ['rx_mbps' => null, 'tx_mbps' => null]])
+        ->and($noBaseline)->toBe(['1' => ['rx_mbps' => null, 'tx_mbps' => null]]);
+});
+
 it('parses SMTP reply codes from reply lines', function () {
     $adapter = new MailServerProbeAdapter();
 

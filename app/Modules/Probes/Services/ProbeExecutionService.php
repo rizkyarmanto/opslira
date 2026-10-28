@@ -30,7 +30,7 @@ class ProbeExecutionService
         $adapter = $this->factory->make($target->protocol_type);
         $credentials = $this->decryptCredentials($target);
 
-        $config = [...($target->config_payload ?? []), 'host' => $target->host_or_endpoint, 'port' => $target->port];
+        $config = [...($target->config_payload ?? []), 'host' => $target->host_or_endpoint, 'port' => $target->port, 'target_id' => $target->id];
         $adapter->forTarget($target)->configure($config, $credentials);
 
         $result = $adapter->execute();

@@ -203,7 +203,7 @@ class TargetController
                 );
             }
 
-            $config = [...($target->config_payload ?? []), 'host' => $target->host_or_endpoint, 'port' => $target->port];
+            $config = [...($target->config_payload ?? []), 'host' => $target->host_or_endpoint, 'port' => $target->port, 'target_id' => $target->id];
             $adapter->forTarget($target)->configure($config, $credentials);
 
             /** @var ProbeResult $result */
