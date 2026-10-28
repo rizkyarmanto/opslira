@@ -24,11 +24,16 @@ class DashboardController
     public function noc(): Response
     {
         $targets = MonitoringTarget::where('is_active', true)->get(['id', 'name', 'dashboard_group', 'target_type', 'environment', 'host_or_endpoint', 'port', 'protocol_type', 'config_payload', 'current_status', 'is_maintenance', 'last_checked_at']);
+
+        // Redis keeps numbers as plain strings and returns them uncast, so the
+        // cached figure is normalized back to a number before it reaches the page.
+        $cachedSla = Cache::remember('noc:sla:global', 60, fn () => $this->globalSla());
+
         return Inertia::render('Dashboard/NocOverview', [
             'summary' => $this->buildSummary($targets),
             'targets' => $this->decorateTargets($targets),
             'incidents' => $this->activeIncidents(),
-            'globalSla' => Cache::remember('noc:sla:global', 60, fn () => $this->globalSla()),
+            'globalSla' => $cachedSla === null ? null : (float) $cachedSla,
             'slaWindowDays' => now()->setTimezone('Asia/Jakarta')->daysInMonth,
             'slaTrend' => Cache::remember('noc:sla:trend', 60, fn () => $this->slaTrend()),
             'targetDailySla' => Cache::remember('noc:sla:target-daily', 60, fn () => $this->targetDailySla()),

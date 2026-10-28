@@ -4,6 +4,7 @@ use App\Models\User;
 use App\Modules\Reporting\Services\SlaDashboardService;
 use App\Modules\Targets\Models\MonitoringTarget;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 function ensureLogPartition(Carbon $date): void
@@ -116,5 +117,22 @@ it('renders the NOC overview with time-based sla props', function () {
             ->where('globalSla', $expectedGlobal)
             ->has('slaTrend', 30)
             ->has('targetDailySla')
+        );
+});
+
+it('hands the page a number when the cache holds the sla as a numeric string', function () {
+    $user = User::factory()->create();
+    MonitoringTarget::factory()->create(['degraded_threshold_ms' => 5000]);
+
+    // Redis, the production cache store, keeps numeric values as plain strings
+    // and returns them without a cast, so a cached 99.94 arrives as '99.94'.
+    Cache::put('noc:sla:global', '99.94', 60);
+
+    $this->actingAs($user)
+        ->get('/dashboard/noc')
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('Dashboard/NocOverview')
+            ->where('globalSla', 99.94)
         );
 });
