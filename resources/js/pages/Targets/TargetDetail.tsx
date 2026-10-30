@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import ReactECharts from 'echarts-for-react';
@@ -11,9 +11,11 @@ import ProtocolBadge from '@/components/beautiful-ui/ProtocolBadge';
 import ExpiryCountdownCard from '@/components/beautiful-ui/ExpiryCountdownCard';
 import SlidingNumber from '@/components/motion-primitives/SlidingNumber';
 import NoData from '@/components/shared/NoData';
+import ConfirmModal from '@/components/shared/ConfirmModal';
+import SlideOverDrawer from '@/components/ui-layouts/SlideOverDrawer';
 import TargetFormDrawer from '@/pages/Targets/TargetFormDrawer';
 import { formatDateTime, relativeTime } from '@/lib/time';
-import { api } from '@/lib/api';
+import { api, apiErrorMessage } from '@/lib/api';
 import type { Incident, MonitoringTarget, TargetState } from '@/types/monitoring';
 interface Props {
     target: MonitoringTarget & { state: TargetState; has_credentials: boolean };
@@ -22,19 +24,46 @@ interface Props {
         status: string;
         response_time_ms: number | null;
         checked_at: string;
-        error_message: string | null;
     }>;
     incidents: Incident[];
+    /** Full incident count for this target; the card renders at most five. */
+    incident_total: number;
 }
+
+/** One row from the Degraded history tab: a check that came back DEGRADED. */
+interface DegradedLog {
+    id: number;
+    status: string;
+    response_time_ms: number | null;
+    checked_at: string;
+    error_message: string | null;
+}
+
+/** Check log views. Checks is the probe feed; Degraded history filters it. */
+const logTabs: Array<{ key: 'checks' | 'degraded'; label: string }> = [
+    { key: 'checks', label: 'Checks' },
+    { key: 'degraded', label: 'Degraded history' },
+];
 
 /**
  * Target detail: the evidence behind a status verdict. The chart answers one
  * question, how response time has moved over the recent checks, so its title states
  * that question (C-3). Logs are newest first with named columns (R-20).
  */
-export default function TargetDetail({ target, logs, incidents }: Props) {
+export default function TargetDetail({ target, logs, incidents, incident_total }: Props) {
     const [editing, setEditing] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [resolveTarget, setResolveTarget] = useState<Incident | null>(null);
+    const [resolving, setResolving] = useState(false);
+    const [resolveError, setResolveError] = useState<string | null>(null);
+    const [showAllIncidents, setShowAllIncidents] = useState(false);
+    const [allIncidents, setAllIncidents] = useState<Incident[] | null>(null);
+    const [loadingIncidents, setLoadingIncidents] = useState(false);
+    const [incidentError, setIncidentError] = useState<string | null>(null);
+    const [logTab, setLogTab] = useState<'checks' | 'degraded'>('checks');
+    const [degradedLogs, setDegradedLogs] = useState<DegradedLog[] | null>(null);
+    const [degradedLoading, setDegradedLoading] = useState(false);
+    const [degradedError, setDegradedError] = useState<string | null>(null);
     const ordered = [...logs].reverse();
     const times = ordered.map((l) => new Date(l.checked_at).toLocaleTimeString('en-US'));
     const latencies = ordered.map((l) => l.response_time_ms);
@@ -47,6 +76,66 @@ export default function TargetDetail({ target, logs, incidents }: Props) {
             router.reload();
         } finally {
             setBusy(false);
+        }
+    };
+
+    const openResolve = (incident: Incident) => {
+        setResolveError(null);
+        setResolveTarget(incident);
+    };
+
+    // The drawer fetches the full history on first open and keeps it while the
+    // panel stays mounted, so re-opening costs nothing until a resolve reloads it.
+    const loadAllIncidents = async () => {
+        setLoadingIncidents(true);
+        setIncidentError(null);
+        try {
+            const res = await api.get(`/targets/${target.id}/incidents`);
+            setAllIncidents(res.data.data as Incident[]);
+        } catch (error) {
+            setIncidentError(apiErrorMessage(error, 'Could not load the incident history.'));
+        } finally {
+            setLoadingIncidents(false);
+        }
+    };
+
+    const openAllIncidents = () => {
+        setShowAllIncidents(true);
+        if (allIncidents === null) void loadAllIncidents();
+    };
+
+    const loadDegradedLogs = async () => {
+        setDegradedLoading(true);
+        setDegradedError(null);
+        try {
+            const res = await api.get(`/targets/${target.id}/degraded-logs`);
+            setDegradedLogs(res.data.data as DegradedLog[]);
+        } catch (error) {
+            setDegradedError(apiErrorMessage(error, 'Could not load degraded checks.'));
+        } finally {
+            setDegradedLoading(false);
+        }
+    };
+
+    const selectLogTab = (tab: 'checks' | 'degraded') => {
+        setLogTab(tab);
+        if (tab === 'degraded' && degradedLogs === null) void loadDegradedLogs();
+    };
+
+    const confirmResolve = async () => {
+        if (!resolveTarget) return;
+        setResolving(true);
+        try {
+            await api.post(`/incidents/${resolveTarget.id}/resolve`);
+            setResolveTarget(null);
+            router.reload();
+            // The page reload refreshes the card and its count, not the drawer's
+            // own fetched list, so that list is refetched while it is on screen.
+            if (showAllIncidents) void loadAllIncidents();
+        } catch (error) {
+            setResolveError(apiErrorMessage(error, 'Could not resolve this incident.'));
+        } finally {
+            setResolving(false);
         }
     };
 
@@ -160,7 +249,16 @@ export default function TargetDetail({ target, logs, incidents }: Props) {
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <Card className="p-5">
-                    <h2 className="mb-3 text-sm font-semibold text-noc-text">Incident history</h2>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <h2 className="text-sm font-semibold text-noc-text">Incident history</h2>
+                        {incident_total > 0 && (
+                            <span className="tabular text-[11px] text-noc-muted">
+                                {incident_total > incidents.length
+                                    ? `Showing ${incidents.length} of ${incident_total}`
+                                    : `${incident_total} total`}
+                            </span>
+                        )}
+                    </div>
                     {incidents.length === 0 ? (
                         <p className="py-4 text-center text-xs text-noc-muted">
                             No incidents recorded for this target.
@@ -168,31 +266,78 @@ export default function TargetDetail({ target, logs, incidents }: Props) {
                     ) : (
                         <ul className="space-y-2">
                             {incidents.map((i) => (
-                                <li key={i.id} className="rounded-sm border border-noc-border px-3 py-2">
-                                    <div className="flex items-center justify-between gap-2">
-                                        <span className="text-xs font-semibold text-noc-text">
-                                            {i.severity === 'CRITICAL' ? 'Critical' : 'Warning'}
-                                        </span>
-                                        <span className="text-[10px] text-noc-muted">{i.status}</span>
-                                    </div>
-                                    <p className="mt-1 text-xs text-noc-muted">{i.root_cause_message}</p>
-                                    <p className="tabular mt-1 text-[10px] text-noc-muted">
-                                        {formatDateTime(i.started_at) ?? ''}
-                                        {i.resolved_at ? ` until ${formatDateTime(i.resolved_at)}` : ', not yet resolved'}
-                                    </p>
-                                </li>
+                                <IncidentRow key={i.id} incident={i} onResolve={openResolve} />
                             ))}
                         </ul>
+                    )}
+                    {incident_total > 5 && (
+                        <Button variant="ghost" className="mt-3 !px-3 !py-1.5 !text-xs" onClick={openAllIncidents}>
+                            View all incidents
+                        </Button>
                     )}
                 </Card>
 
                 <Card className="p-5">
-                    <h2 className="mb-3 text-sm font-semibold text-noc-text">Check log</h2>
-                    {logs.length === 0 ? (
-                        <p className="py-4 text-center text-xs text-noc-muted">
-                            No logs yet. No probe has run for this target.
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <h2 className="text-sm font-semibold text-noc-text">Check log</h2>
+                        <div role="group" aria-label="Check log view" className="flex items-center gap-1">
+                            {logTabs.map((tab) => (
+                                <button
+                                    key={tab.key}
+                                    type="button"
+                                    aria-pressed={logTab === tab.key}
+                                    onClick={() => selectLogTab(tab.key)}
+                                    className={`rounded-xs px-2.5 py-1 text-xs transition-colors ${
+                                        logTab === tab.key
+                                            ? 'bg-white/5 font-medium text-noc-text'
+                                            : 'text-noc-muted hover:text-noc-text'
+                                    }`}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    {logTab === 'checks' ? (
+                        logs.length === 0 ? (
+                            <p className="py-4 text-center text-xs text-noc-muted">
+                                No logs yet. No probe has run for this target.
+                            </p>
+                        ) : (
+                            <div className="max-h-80 overflow-y-auto">
+                                <table className="w-full text-left text-xs">
+                                    <thead className="sticky top-0 bg-noc-surface">
+                                        <tr>
+                                            <th scope="col" className="field-label py-2">Time</th>
+                                            <th scope="col" className="field-label py-2">Status</th>
+                                            <th scope="col" className="field-label py-2 text-right">Response</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-noc-border">
+                                        {logs.map((log) => (
+                                            <tr key={log.id}>
+                                                <td className="tabular py-1.5 text-noc-muted">
+                                                    {new Date(log.checked_at).toLocaleString('en-US')}
+                                                </td>
+                                                <td className="py-1.5">
+                                                    <StatusBadge status={log.status as never} />
+                                                </td>
+                                                <td className="tabular py-1.5 text-right text-noc-muted">
+                                                    {log.response_time_ms !== null ? `${log.response_time_ms} ms` : <NoData />}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )
+                    ) : degradedLoading ? (
+                        <p className="py-4 text-center text-xs text-noc-muted">Loading degraded checks...</p>
+                    ) : degradedError ? (
+                        <p role="alert" className="py-4 text-center text-xs text-status-down">
+                            {degradedError}
                         </p>
-                    ) : (
+                    ) : degradedLogs && degradedLogs.length > 0 ? (
                         <div className="max-h-80 overflow-y-auto">
                             <table className="w-full text-left text-xs">
                                 <thead className="sticky top-0 bg-noc-surface">
@@ -203,25 +348,76 @@ export default function TargetDetail({ target, logs, incidents }: Props) {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-noc-border">
-                                    {logs.slice(0, 50).map((log) => (
-                                        <tr key={log.id}>
-                                            <td className="tabular py-1.5 text-noc-muted">
-                                                {new Date(log.checked_at).toLocaleString('en-US')}
-                                            </td>
-                                            <td className="py-1.5">
-                                                <StatusBadge status={log.status as never} />
-                                            </td>
-                                            <td className="tabular py-1.5 text-right text-noc-muted">
-                                                {log.response_time_ms !== null ? `${log.response_time_ms} ms` : <NoData />}
-                                            </td>
-                                        </tr>
+                                    {degradedLogs.map((log) => (
+                                        <Fragment key={log.id}>
+                                            <tr>
+                                                <td className="tabular py-1.5 text-noc-muted">
+                                                    {new Date(log.checked_at).toLocaleString('en-US')}
+                                                </td>
+                                                <td className="py-1.5">
+                                                    <StatusBadge status={log.status as never} />
+                                                </td>
+                                                <td className="tabular py-1.5 text-right text-noc-muted">
+                                                    {log.response_time_ms !== null ? `${log.response_time_ms} ms` : <NoData />}
+                                                </td>
+                                            </tr>
+                                            {log.error_message && (
+                                                <tr>
+                                                    <td colSpan={3} className="pb-2 text-[11px] text-noc-muted">
+                                                        {log.error_message}
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </Fragment>
                                     ))}
                                 </tbody>
                             </table>
                         </div>
+                    ) : (
+                        <p className="py-4 text-center text-xs text-noc-muted">
+                            No degraded checks recorded for this target.
+                        </p>
                     )}
                 </Card>
             </div>
+            <SlideOverDrawer
+                open={showAllIncidents}
+                onClose={() => setShowAllIncidents(false)}
+                title="All incidents"
+                description={`History for ${target.name}`}
+                footer={<p className="text-xs text-noc-muted">Showing newest 200</p>}
+            >
+                {loadingIncidents ? (
+                    <p className="py-6 text-center text-sm text-noc-muted">Loading incidents...</p>
+                ) : incidentError ? (
+                    <p role="alert" className="py-6 text-center text-sm text-status-down">
+                        {incidentError}
+                    </p>
+                ) : allIncidents && allIncidents.length > 0 ? (
+                    <ul className="space-y-2">
+                        {allIncidents.map((i) => (
+                            <IncidentRow key={i.id} incident={i} onResolve={openResolve} />
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="py-6 text-center text-sm text-noc-muted">
+                        No incidents recorded for this target.
+                    </p>
+                )}
+            </SlideOverDrawer>
+
+            <ConfirmModal
+                tone="info"
+                open={resolveTarget !== null}
+                title="Resolve incident"
+                message={`Mark the incident for "${target.name}" as resolved? The target keeps its probe status.`}
+                confirmLabel="Resolve"
+                pending={resolving}
+                error={resolveError ?? undefined}
+                onConfirm={confirmResolve}
+                onClose={() => setResolveTarget(null)}
+            />
+
             <TargetFormDrawer
                 open={editing}
                 onClose={() => setEditing(false)}
@@ -239,6 +435,36 @@ function num(value: unknown): number | null {
 
 function str(value: unknown): string | null {
     return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/** One incident line, shared by the history card and its all-incidents drawer. */
+function IncidentRow({ incident, onResolve }: { incident: Incident; onResolve: (incident: Incident) => void }) {
+    return (
+        <li className="rounded-sm border border-noc-border px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-noc-text">
+                    {incident.severity === 'CRITICAL' ? 'Critical' : 'Warning'}
+                </span>
+                <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-noc-muted">{incident.status}</span>
+                    {incident.status !== 'RESOLVED' && (
+                        <Button
+                            variant="ghost"
+                            className="!px-2 !py-1 !text-[11px]"
+                            onClick={() => onResolve(incident)}
+                        >
+                            Resolve
+                        </Button>
+                    )}
+                </div>
+            </div>
+            <p className="mt-1 text-xs text-noc-muted">{incident.root_cause_message}</p>
+            <p className="tabular mt-1 text-[10px] text-noc-muted">
+                {formatDateTime(incident.started_at) ?? ''}
+                {incident.resolved_at ? ` until ${formatDateTime(incident.resolved_at)}` : ', not yet resolved'}
+            </p>
+        </li>
+    );
 }
 
 /**

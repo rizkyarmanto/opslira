@@ -8,6 +8,7 @@ import Card from '@/components/shared/Card';
 import ReloadIndicator from '@/components/beautiful-ui/ReloadIndicator';
 import StatusBadge, { StatusRail } from '@/components/shared/StatusBadge';
 import SlidingNumber from '@/components/motion-primitives/SlidingNumber';
+import SlideOverDrawer from '@/components/ui-layouts/SlideOverDrawer';
 import { relativeTime } from '@/lib/time';
 import type {
     Incident,
@@ -137,6 +138,7 @@ export default function NocOverview({
         setLiveTargets(targets);
     }, [targets]);
     const [showAllTargets, setShowAllTargets] = useState(false);
+    const [showAllSla, setShowAllSla] = useState(false);
     const [chartTab, setChartTab] = useState<ChartTab>('uptime');
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
     const liveStatusById = new Map(liveTargets.map((t) => [t.id, t]));
@@ -304,6 +306,11 @@ export default function NocOverview({
                         {slaDate ? `System SLA by target (daily rollup), ${slaDate}` : 'System SLA by target (daily rollup)'}
                     </h2>
                     <span className="text-xs text-noc-muted">Status badges update every 15 seconds. Percentages update daily.</span>
+                    {dailySla.length > 5 && (
+                        <span className="tabular rounded-xs bg-white/5 px-2 py-0.5 text-[11px] text-noc-muted">
+                            Showing 5 of {dailySla.length}
+                        </span>
+                    )}
                 </div>
                 {dailySla.length === 0 ? (
                     <Card className="px-4 py-6">
@@ -312,37 +319,22 @@ export default function NocOverview({
                         </p>
                     </Card>
                 ) : (
-                    <div className="space-y-2">
-                        {dailySla.map((row) => (
-                            <Link
-                                key={row.target_id}
-                                href={`/targets/${row.target_id}`}
-                                className="flex items-center gap-4 rounded-md border border-noc-border bg-noc-surface px-4 py-3 transition-colors hover:bg-white/[0.03]"
+                    <>
+                        <div className="space-y-2">
+                            {dailySla.slice(0, 5).map((row) => (
+                                <SlaRow key={row.target_id} row={row} />
+                            ))}
+                        </div>
+                        {dailySla.length > 5 && (
+                            <Button
+                                variant="ghost"
+                                className="mt-3"
+                                onClick={() => setShowAllSla(true)}
                             >
-                                <div className="flex min-w-0 items-center gap-3 sm:w-72">
-                                    <p className="truncate text-sm font-medium text-noc-text">{row.name}</p>
-                                    <StatusBadge status={row.current_status} />
-                                </div>
-                                <div className="flex h-6 flex-1 items-center">
-                                    <div className="h-2 w-full overflow-hidden rounded-xs bg-white/5">
-                                        <div
-                                            className="h-full rounded-xs"
-                                            style={{
-                                                width: `${row.uptime}%`,
-                                                backgroundColor: slaBarFill[row.current_status],
-                                            }}
-                                        />
-                                    </div>
-                                </div>
-                                <span className="tabular w-24 shrink-0 text-right text-sm text-noc-text">
-                                    {row.uptime.toFixed(2)}%
-                                </span>
-                                <span className="tabular hidden w-28 shrink-0 text-right text-xs text-noc-muted sm:block">
-                                    {row.total_checks} checks
-                                </span>
-                            </Link>
-                        ))}
-                    </div>
+                                View all targets SLA
+                            </Button>
+                        )}
+                    </>
                 )}
             </section>
 
@@ -488,7 +480,56 @@ export default function NocOverview({
                     </>
                 )}
             </section>
+
+            <SlideOverDrawer
+                open={showAllSla}
+                onClose={() => setShowAllSla(false)}
+                title="All targets SLA"
+                description={slaDate ? `Daily rollup, ${slaDate}` : 'Daily rollup'}
+            >
+                <div className="space-y-2">
+                    {dailySla.map((row) => (
+                        <SlaRow key={row.target_id} row={row} />
+                    ))}
+                </div>
+            </SlideOverDrawer>
         </AppLayout>
+    );
+}
+
+/**
+ * One System SLA row, shared by the inline top-five list and the all-targets
+ * drawer. The bar fill names the target's real status, never a threshold
+ * invented here (DESIGN.md).
+ */
+function SlaRow({ row }: { row: TargetDailySla }) {
+    return (
+        <Link
+            href={`/targets/${row.target_id}`}
+            className="flex items-center gap-4 rounded-md border border-noc-border bg-noc-surface px-4 py-3 transition-colors hover:bg-white/[0.03]"
+        >
+            <div className="flex min-w-0 items-center gap-3 sm:w-72">
+                <p className="truncate text-sm font-medium text-noc-text">{row.name}</p>
+                <StatusBadge status={row.current_status} />
+            </div>
+            <div className="flex h-6 flex-1 items-center">
+                <div className="h-2 w-full overflow-hidden rounded-xs bg-white/5">
+                    <div
+                        className="h-full rounded-xs"
+                        style={{
+                            width: `${row.uptime}%`,
+                            backgroundColor: slaBarFill[row.current_status],
+                        }}
+                    />
+                </div>
+            </div>
+            <span className="tabular w-24 shrink-0 text-right text-sm text-noc-text">
+                {row.uptime.toFixed(2)}%
+            </span>
+            <span className="tabular hidden w-28 shrink-0 text-right text-xs text-noc-muted sm:block">
+                {row.total_checks} checks
+            </span>
+        </Link>
     );
 }
 

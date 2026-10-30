@@ -136,7 +136,10 @@ class ProbeExecutionService
             $incident->update([
                 'status' => 'RESOLVED',
                 'resolved_at' => $resolvedAt,
-                'duration_seconds' => $resolvedAt->diffInSeconds($incident->started_at),
+                // Whole seconds between start and resolve. Carbon 3's
+                // diffInSeconds returns a signed float and the column is an
+                // integer, so the epoch timestamps are subtracted instead.
+                'duration_seconds' => max(0, $resolvedAt->getTimestamp() - $incident->started_at->getTimestamp()),
             ]);
         }
     }

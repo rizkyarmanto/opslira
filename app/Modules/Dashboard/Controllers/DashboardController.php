@@ -64,16 +64,7 @@ class DashboardController
             $query->where('status', 'RESOLVED');
         }
 
-        $incidents = $query->get()->map(fn ($i) => [
-            'id' => $i->id,
-            'target_id' => $i->target_id,
-            'target_name' => $i->target?->name,
-            'severity' => $i->severity,
-            'status' => $i->status,
-            'root_cause_message' => $i->root_cause_message,
-            'started_at' => $i->started_at?->toIso8601String(),
-            'resolved_at' => $i->resolved_at?->toIso8601String(),
-        ])->all();
+        $incidents = $query->get()->map->toAlertsRow()->all();
 
         return Inertia::render('Dashboard/AlertsIndex', [
             'incidents' => $incidents,
@@ -210,15 +201,7 @@ class DashboardController
             ->orderByDesc('started_at')
             ->limit(20)
             ->get()
-            ->map(fn ($i) => [
-                'id' => $i->id,
-                'target_id' => $i->target_id,
-                'target_name' => $i->target?->name,
-                'severity' => $i->severity,
-                'status' => $i->status,
-                'root_cause_message' => $i->root_cause_message,
-                'started_at' => $i->started_at?->toIso8601String(),
-            ])
+            ->map->toAlertsRow()
             ->all();
     }
 

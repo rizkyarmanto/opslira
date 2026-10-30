@@ -26,6 +26,8 @@ return Application::configure(basePath: dirname(__DIR__))
             Route::prefix('api/v1')
                 ->group(base_path('app/Modules/Targets/Routes/api.php'));
             Route::prefix('api/v1')
+                ->group(base_path('app/Modules/Incidents/Routes/api.php'));
+            Route::prefix('api/v1')
                 ->group(base_path('app/Modules/Dashboard/Routes/api.php'));
             Route::prefix('api/v1')
                 ->group(base_path('app/Modules/Reporting/Routes/api.php'));

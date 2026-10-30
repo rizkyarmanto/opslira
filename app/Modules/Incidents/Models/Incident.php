@@ -41,4 +41,25 @@ class Incident extends Model
     {
         return $query->where('status', '!=', 'RESOLVED');
     }
+
+    /**
+     * The row shape every incident list shares: the alerts screen, the target
+     * detail drawer, and the resolve response. One mapping keeps them identical,
+     * and the caller loads `target` when it needs target_name.
+     *
+     * @return array<string, mixed>
+     */
+    public function toAlertsRow(): array
+    {
+        return [
+            'id' => $this->id,
+            'target_id' => $this->target_id,
+            'target_name' => $this->target?->name,
+            'severity' => $this->severity,
+            'status' => $this->status,
+            'root_cause_message' => $this->root_cause_message,
+            'started_at' => $this->started_at?->toIso8601String(),
+            'resolved_at' => $this->resolved_at?->toIso8601String(),
+        ];
+    }
 }

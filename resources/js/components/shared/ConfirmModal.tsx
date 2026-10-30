@@ -19,6 +19,7 @@ export default function ConfirmModal({
     onClose,
     pending = false,
     tone = 'danger',
+    error,
 }: {
     open: boolean;
     title: string;
@@ -28,6 +29,8 @@ export default function ConfirmModal({
     onClose: () => void;
     pending?: boolean;
     tone?: 'danger' | 'info';
+    /** Failure text from the caller; the panel stays open and names what went wrong. */
+    error?: string;
 }) {
     const panelRef = useRef<HTMLDivElement>(null);
     const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -102,6 +105,11 @@ export default function ConfirmModal({
                 <p id={messageId} className="mt-1 text-sm text-noc-muted">
                     {message}
                 </p>
+                {error && (
+                    <p role="alert" className="mt-2 text-xs text-status-down">
+                        {error}
+                    </p>
+                )}
                 <div className="mt-5 flex justify-end gap-2">
                     <Button variant="ghost" onClick={onClose}>
                         Cancel

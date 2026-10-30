@@ -18,6 +18,18 @@ use Inertia\Response;
 
 class TargetController
 {
+    /** Rows the detail page chart and check log card share. */
+    private const DETAIL_LOG_LIMIT = 50;
+
+    /** Incidents the detail page history card shows before the drawer. */
+    private const DETAIL_INCIDENT_LIMIT = 5;
+
+    /** Rows the detail page "all incidents" drawer fetches, newest first. */
+    private const INCIDENT_DRAWER_LIMIT = 200;
+
+    /** Degraded check rows the detail page Degraded history tab fetches. */
+    private const DEGRADED_LOG_LIMIT = 50;
+
     public function __construct(
         private readonly CredentialEncryptionService $encryption,
         private readonly ProbeAdapterFactory $factory,
@@ -126,7 +138,17 @@ class TargetController
 
     public function show(MonitoringTarget $target): Response
     {
-        $logs = $target->logs()->orderByDesc('checked_at')->limit(50)->get();
+        // The chart and the check log card on the detail page read the same
+        // series, so one cap covers both. At the default 60 second interval 50
+        // rows is about the last hour; the card scrolls instead of the page
+        // growing (R-21).
+        $logs = $target->logs()
+            ->orderByDesc('checked_at')
+            ->limit(self::DETAIL_LOG_LIMIT)
+            // Only the four columns the page renders. metrics_payload is JSONB and
+            // error_message is TEXT; neither is drawn here, and selecting them
+            // ships every probe's raw metrics to the browser.
+            ->get(['id', 'status', 'response_time_ms', 'checked_at']);
 
         return Inertia::render('Targets/TargetDetail', [
             'target' => [
@@ -135,7 +157,47 @@ class TargetController
                 'has_credentials' => $target->credentials()->exists(),
             ],
             'logs' => $logs,
-            'incidents' => $target->incidents()->orderByDesc('started_at')->limit(20)->get(),
+            // Open and resolved together, newest first: the card keeps a short
+            // slice and a closed incident stays in history after it resolves.
+            'incidents' => $target->incidents()
+                ->orderByDesc('started_at')
+                ->limit(self::DETAIL_INCIDENT_LIMIT)
+                ->get(),
+            // The card caps its list at five, so it needs the full count to say
+            // how many rows sit behind the "View all incidents" drawer.
+            'incident_total' => $target->incidents()->count(),
+        ]);
+    }
+
+    /**
+     * Full incident history for the detail page drawer: newest first, open and
+     * resolved mixed, capped at the drawer's stated limit.
+     */
+    public function incidents(MonitoringTarget $target): JsonResponse
+    {
+        return response()->json([
+            'data' => $target->incidents()
+                ->with('target:id,name')
+                ->orderByDesc('started_at')
+                ->limit(self::INCIDENT_DRAWER_LIMIT)
+                ->get()
+                ->map->toAlertsRow()
+                ->all(),
+        ]);
+    }
+
+    /**
+     * Degraded check rows for the detail page Degraded history tab. A DEGRADED
+     * probe result creates no incident, so this reads monitoring_logs directly.
+     */
+    public function degradedLogs(MonitoringTarget $target): JsonResponse
+    {
+        return response()->json([
+            'data' => $target->logs()
+                ->where('status', 'DEGRADED')
+                ->orderByDesc('checked_at')
+                ->limit(self::DEGRADED_LOG_LIMIT)
+                ->get(['id', 'status', 'response_time_ms', 'checked_at', 'error_message']),
         ]);
     }
 
