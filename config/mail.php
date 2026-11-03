@@ -11,7 +11,11 @@ return [
             'port' => env('MAIL_PORT', 2525),
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            'timeout' => env('MAIL_TIMEOUT', 10),
+            // Symfony disables certificate and peer-name checks only when this is
+            // explicitly false; the default keeps TLS verification on for any
+            // relay with a real certificate.
+            'verify_peer' => env('MAIL_VERIFY_PEER', true),
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url(env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
         ],
         'log' => [

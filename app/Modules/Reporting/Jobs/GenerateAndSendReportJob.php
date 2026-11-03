@@ -16,6 +16,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Generates daily/weekly/monthly reports (PDF + Excel) and emails recipients.
@@ -251,35 +252,88 @@ class GenerateAndSendReportJob implements ShouldQueue
      */
     private function sendEmails(ReportSchedule $schedule, GeneratedReport $report, array $data): array
     {
-        $recipients = array_merge($schedule->recipients_to ?? [], $schedule->recipients_cc ?? []);
-        $sent = 0;
-        $failed = 0;
-        foreach ($recipients as $email) {
-            $log = EmailDeliveryLog::create([
+        $to = array_values((array) ($schedule->recipients_to ?? []));
+        $cc = array_values((array) ($schedule->recipients_cc ?? []));
+        $total = count($to) + count($cc);
+
+        if ($total === 0) {
+            return ['sent' => 0, 'failed' => 0, 'total' => 0];
+        }
+
+        $subject = "[Opslira] {$data['period_type']} report, {$schedule->name}";
+        $body = "Report {$data['period_label']}\n"
+            ."Global SLA: {$data['summary']['global_sla']}%\n"
+            ."Incidents: {$data['summary']['total_incidents']}";
+        $attachments = $this->reportAttachments($report);
+
+        // One message for every recipient, so the primary recipients stay in To
+        // and the copy list stays in Cc instead of being merged into To.
+        $logIds = [];
+        foreach (array_merge($to, $cc) as $email) {
+            $logIds[] = EmailDeliveryLog::create([
                 'email_category' => 'SCHEDULED_REPORT',
                 'generated_report_id' => $report->id,
                 'recipient_email' => $email,
-                'subject' => "[Opslira] {$data['period_type']} report, {$schedule->name}",
+                'subject' => $subject,
                 'delivery_status' => 'PENDING',
+            ])->id;
+        }
+
+        try {
+            Mail::raw($body, function ($message) use ($to, $cc, $subject, $attachments) {
+                $message->to($to)->cc($cc)->subject($subject);
+                foreach ($attachments as $path) {
+                    $message->attach($path);
+                }
+            });
+        } catch (\Throwable $e) {
+            // The whole message failed, so every recipient failed with it, and the
+            // caller marks the report FAILED: the schedule stays due and the next
+            // runner tick retries instead of skipping the period.
+            $this->markDeliveryLogs($logIds, [
+                'delivery_status' => 'FAILED',
+                'retry_count' => 1,
+                'smtp_response_or_error' => $e->getMessage(),
             ]);
-            try {
-                Mail::raw(
-                    "Report {$data['period_label']}\nGlobal SLA: {$data['summary']['global_sla']}%\nIncidents: {$data['summary']['total_incidents']}",
-                    function ($message) use ($email, $schedule, $data) {
-                        $message->to($email)->subject("[Opslira] {$data['period_type']} report, {$schedule->name}");
-                    },
-                );
-                $log->update(['delivery_status' => 'SENT', 'sent_at' => now()]);
-                $sent++;
-            } catch (\Throwable $e) {
-                $log->update([
-                    'delivery_status' => 'FAILED',
-                    'retry_count' => 1,
-                    'smtp_response_or_error' => $e->getMessage(),
-                ]);
-                $failed++;
+
+            throw new \RuntimeException('Email delivery failed: '.$e->getMessage(), 0, $e);
+        }
+
+        $this->markDeliveryLogs($logIds, ['delivery_status' => 'SENT', 'sent_at' => now()]);
+
+        return ['sent' => $total, 'failed' => 0, 'total' => $total];
+    }
+
+    /**
+     * Stored report files that exist on the reports disk, as absolute paths the
+     * mailer can attach.
+     *
+     * @return array<int, string>
+     */
+    private function reportAttachments(GeneratedReport $report): array
+    {
+        $paths = [];
+
+        foreach ([$report->pdf_file_path, $report->excel_file_path] as $stored) {
+            if (is_string($stored) && $stored !== '' && Storage::disk('reports')->exists($stored)) {
+                $paths[] = Storage::disk('reports')->path($stored);
             }
         }
-        return ['sent' => $sent, 'failed' => $failed, 'total' => count($recipients)];
+
+        return $paths;
     }
+
+    /**
+     * @param  array<int, string>  $ids
+     * @param  array<string, mixed>  $attributes
+     */
+    private function markDeliveryLogs(array $ids, array $attributes): void
+    {
+        if ($ids === []) {
+            return;
+        }
+
+        EmailDeliveryLog::whereIn('id', $ids)->update($attributes);
+    }
+
 }

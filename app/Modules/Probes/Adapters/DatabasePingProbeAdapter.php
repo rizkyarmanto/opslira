@@ -18,8 +18,8 @@ class DatabasePingProbeAdapter extends BaseProbeAdapter
     public function execute(): ProbeResult
     {
         $host = $this->config('host');
-        $port = (int) $this->config('port', 5432);
         $driver = (string) $this->config('db_driver', 'pgsql');
+        $port = $this->resolvePort($driver);
         $database = (string) $this->config('database_name', '');
         $query = (string) $this->config('query', 'SELECT 1');
 
@@ -34,10 +34,21 @@ class DatabasePingProbeAdapter extends BaseProbeAdapter
 
         try {
             $dsn = match ($driver) {
+                'pgsql' => "pgsql:host={$host};port={$port};dbname={$database}",
                 'mysql', 'mariadb' => "mysql:host={$host};port={$port};dbname={$database}",
                 'sqlsrv' => "sqlsrv:Server={$host},{$port};Database={$database}",
-                default => "pgsql:host={$host};port={$port};dbname={$database}",
+                default => null,
             };
+
+            if ($dsn === null) {
+                return ProbeResult::down("Unsupported db_driver '{$driver}' (expected pgsql/mysql/sqlsrv)");
+            }
+
+            if (! in_array($driver, PDO::getAvailableDrivers(), true)) {
+                // "could not find driver" from the PDO constructor names neither
+                // the engine nor the image, so name both here.
+                return ProbeResult::down("PDO driver '{$driver}' is not installed in the probe image");
+            }
 
             $pdo = new PDO($dsn, $username, $password, [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -74,6 +85,20 @@ class DatabasePingProbeAdapter extends BaseProbeAdapter
         } catch (\Throwable $e) {
             return ProbeResult::down('DB probe error: '.$e->getMessage());
         }
+    }
+
+    /**
+     * Port to connect to: the explicit Port column when set, otherwise the
+     * engine's own default. Every engine on 5432 would send a MySQL target at
+     * the PostgreSQL port and report a misleading connection failure.
+     */
+    public function resolvePort(string $driver): int
+    {
+        return (int) ($this->config('port') ?: match ($driver) {
+            'mysql', 'mariadb' => 3306,
+            'sqlsrv' => 1433,
+            default => 5432,
+        });
     }
 
     private function connectionStats(PDO $pdo, string $driver): array

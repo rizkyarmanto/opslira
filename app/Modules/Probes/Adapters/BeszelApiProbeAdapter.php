@@ -41,10 +41,14 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
             return ProbeResult::down('Missing Beszel credentials');
         }
 
-        $calls = $apiToken !== '' ? 2 : 3;
-        $perCall = $this->callBudget($calls);
+        // Calls run in sequence, so a per-call share (timeout / calls) starves the
+        // later ones whenever the first is slow: the probe then reports a
+        // connection timeout while the whole budget was still unspent. One
+        // wall-clock deadline gives every call whatever is left.
+        $deadline = microtime(true) + $this->timeoutSeconds;
 
         try {
+            $perCall = $this->remainingBudget($deadline);
             try {
                 $auth = $this->authToken($hubUrl, $perCall);
             } catch (ConnectionException $e) {
@@ -56,6 +60,7 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
             }
 
             // Resolve the human system name to a PocketBase record id.
+            $perCall = $this->remainingBudget($deadline);
             try {
                 $list = $this->authedGet($token, $perCall)
                     ->get("{$hubUrl}/api/collections/systems/records", [
@@ -74,6 +79,7 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
                 return ProbeResult::down("Beszel system '{$systemName}' not found on hub");
             }
             // Latest stats
+            $perCall = $this->remainingBudget($deadline);
             try {
                 $stats = $this->authedGet($token, $perCall)
                     ->get("{$hubUrl}/api/collections/system_stats/records", [
@@ -129,17 +135,20 @@ class BeszelApiProbeAdapter extends BaseProbeAdapter
     }
 
     /**
-     * Shared budget: timeout_seconds splits across sequential calls so the
-     * total stays inside the target timeout. Minimum 2s per call.
+     * Seconds left on the shared deadline, floored at 2 so a nearly exhausted
+     * budget still gives the next call a usable chance instead of a 0 s timeout.
      */
-    private function callBudget(int $calls): int
+    private function remainingBudget(float $deadline): int
     {
-        return max(2, (int) ceil($this->timeoutSeconds / max(1, $calls)));
+        return max(2, (int) ceil($deadline - microtime(true)));
     }
 
+    /**
+     * TLS handshake needs its own room: 3 s minimum, 5 s when the budget allows.
+     */
     private function connectBudget(int $perCall): int
     {
-        return min(3, $perCall);
+        return min(5, max(3, $perCall));
     }
 
     /**

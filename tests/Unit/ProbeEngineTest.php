@@ -1,5 +1,6 @@
 <?php
 
+use App\Modules\Probes\Adapters\DatabasePingProbeAdapter;
 use App\Modules\Probes\Adapters\MailServerProbeAdapter;
 use App\Modules\Probes\Adapters\NetworkSnmpProbeAdapter;
 use App\Modules\Probes\Contracts\ProbeResult;
@@ -9,6 +10,20 @@ use App\Modules\Reporting\Services\SlaCalculatorService;
 use App\Modules\Targets\Models\MonitoringTarget;
 use Illuminate\Support\Facades\Log;
 use Spatie\Ping\PingResult;
+
+/**
+ * Call a private MailServerProbeAdapter method from a unit test. The SMTP and
+ * IMAP frame readers are private, and the socket-pair tests below are the only
+ * way to exercise them without a live relay.
+ *
+ * @param  array<int, mixed>  $arguments
+ */
+function mailProbeCall(object $adapter, string $method, array $arguments): mixed
+{
+    $reflection = new ReflectionMethod($adapter, $method);
+
+    return $reflection->invoke($adapter, ...$arguments);
+}
 
 it('returns the correct adapter for every supported protocol', function () {
     $factory = new ProbeAdapterFactory();
@@ -32,6 +47,27 @@ it('classifies probe result factories correctly', function () {
 
 it('exposes a concrete SLA calculator service', function () {
     expect(app(SlaCalculatorService::class))->toBeInstanceOf(SlaCalculatorService::class);
+});
+
+it('resolves the default port per database driver', function () {
+    $configure = static fn (array $config): DatabasePingProbeAdapter => (new DatabasePingProbeAdapter())->configure($config);
+
+    expect($configure(['host' => 'db'])->resolvePort('pgsql'))->toBe(5432)
+        ->and($configure(['host' => 'db'])->resolvePort('mysql'))->toBe(3306)
+        ->and($configure(['host' => 'db'])->resolvePort('mariadb'))->toBe(3306)
+        ->and($configure(['host' => 'db'])->resolvePort('sqlsrv'))->toBe(1433)
+        ->and($configure(['host' => 'db', 'port' => 6543])->resolvePort('mysql'))->toBe(6543);
+});
+
+it('reports an unsupported database driver instead of probing with pgsql', function () {
+    $adapter = (new DatabasePingProbeAdapter())->configure([
+        'host' => 'db', 'db_driver' => 'postgres', 'database_name' => 'app',
+    ]);
+
+    $result = $adapter->execute();
+
+    expect($result->status)->toBe('DOWN')
+        ->and($result->errorMessage)->toContain("Unsupported db_driver 'postgres'");
 });
 
 it('builds snmpget arguments for v2c community', function () {
@@ -159,35 +195,63 @@ it('detects OK and non-OK tagged IMAP replies', function () {
 it('mailServicePort defaults to smtp on 587', function () {
     $adapter = (new MailServerProbeAdapter())->configure(['host' => 'm']);
 
-    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 587]);
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 587, 'encryption' => 'starttls']);
 });
 
 it('mailServicePort prefers the shared port column with imap mode', function () {
     $adapter = (new MailServerProbeAdapter())
         ->configure(['host' => 'm', 'mail_check_mode' => 'imap', 'port' => 1993]);
 
-    expect($adapter->mailServicePort())->toBe(['mode' => 'imap', 'port' => 1993]);
+    expect($adapter->mailServicePort())->toBe(['mode' => 'imap', 'port' => 1993, 'encryption' => 'starttls']);
 });
 
 it('mailServicePort falls back to legacy check_ports', function () {
     $adapter = (new MailServerProbeAdapter())
         ->configure(['host' => 'm', 'check_ports' => ['smtp' => 2525, 'imap' => 993]]);
 
-    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 2525]);
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 2525, 'encryption' => 'starttls']);
 });
 
 it('mailServicePort falls back to legacy single-port keys', function () {
     $adapter = (new MailServerProbeAdapter())
         ->configure(['host' => 'm', 'mail_check_mode' => 'smtp', 'smtp_port' => 2526]);
 
-    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 2526]);
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 2526, 'encryption' => 'starttls']);
 });
 
 it('mailServicePort forces an unknown mode back to smtp', function () {
     $adapter = (new MailServerProbeAdapter())
         ->configure(['host' => 'm', 'mail_check_mode' => 'pop3']);
 
-    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 587]);
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 587, 'encryption' => 'starttls']);
+});
+
+it('mailServicePort reads implicit TLS from the smtp port 465', function () {
+    $adapter = (new MailServerProbeAdapter())
+        ->configure(['host' => 'm', 'port' => 465]);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 465, 'encryption' => 'ssl']);
+});
+
+it('mailServicePort reads implicit TLS from the imap port 993', function () {
+    $adapter = (new MailServerProbeAdapter())
+        ->configure(['host' => 'm', 'mail_check_mode' => 'imap', 'port' => 993]);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'imap', 'port' => 993, 'encryption' => 'ssl']);
+});
+
+it('mailServicePort keeps an explicit encryption choice over the port default', function () {
+    $adapter = (new MailServerProbeAdapter())
+        ->configure(['host' => 'm', 'port' => 587, 'mail_encryption' => 'none']);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 587, 'encryption' => 'none']);
+});
+
+it('mailServicePort falls back to auto for an unknown encryption choice', function () {
+    $adapter = (new MailServerProbeAdapter())
+        ->configure(['host' => 'm', 'port' => 587, 'mail_encryption' => 'sslv3']);
+
+    expect($adapter->mailServicePort())->toBe(['mode' => 'smtp', 'port' => 587, 'encryption' => 'starttls']);
 });
 
 it('greets with the target host over EHLO', function () {
@@ -228,6 +292,44 @@ it('falls back to HELO when EHLO is rejected', function () {
     expect(trim((string) fgets($server)))->toBe('HELO mail.example.test');
     fclose($server);
     fclose($client);
+});
+
+it('reads a multiline SMTP greeting as one reply', function () {
+    $pair = @stream_socket_pair(STREAM_PF_INET, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+    if ($pair === false) {
+        $this->markTestSkipped('stream_socket_pair unavailable on this runner');
+    }
+
+    [$server, $client] = $pair;
+    fwrite($server, "220-mail.example.test ESMTP\r\n220 ready to talk\r\n");
+
+    $reply = mailProbeCall(new MailServerProbeAdapter(), 'smtpReadReply', [$client]);
+
+    expect($reply)->toBe("220-mail.example.test ESMTP\r\n220 ready to talk\r\n");
+    fclose($server);
+    fclose($client);
+});
+
+it('lists AUTH mechanisms from an EHLO reply and none when AUTH is absent', function () {
+    $adapter = new MailServerProbeAdapter();
+
+    // No AUTH line: the probe must report "AUTH not advertised" instead of
+    // reading the leftover extension lines as an AUTH reply.
+    expect(mailProbeCall($adapter, 'smtpAuthMechanisms', ["250-mail.example.test\r\n250-STARTTLS\r\n250 SIZE 10240000\r\n"]))
+        ->toBe([]);
+
+    expect(mailProbeCall($adapter, 'smtpAuthMechanisms', ["250-mail.example.test\r\n250-AUTH LOGIN PLAIN\r\n250 SIZE 10240000\r\n"]))
+        ->toBe(['LOGIN', 'PLAIN']);
+
+    expect(mailProbeCall($adapter, 'smtpAuthMechanisms', ["250 AUTH=LOGIN\r\n"]))
+        ->toBe(['LOGIN']);
+});
+
+it('accepts TLS 1.3 in the probe crypto methods', function () {
+    $methods = (new ReflectionClass(MailServerProbeAdapter::class))->getReflectionConstant('TLS_METHODS')->getValue();
+
+    expect($methods & STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT)->not->toBe(0)
+        ->and($methods & STREAM_CRYPTO_METHOD_TLS_CLIENT)->not->toBe(0);
 });
 
 it('maps a successful spatie ping result to stats', function () {

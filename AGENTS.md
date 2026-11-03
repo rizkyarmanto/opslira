@@ -61,9 +61,11 @@ npx tsc --noEmit       # type check
 ## Local environment note
 
 This machine sets `variables_order = GPCS` in `php.ini`, so `$_ENV` is empty, and the
-shell environment leaks empty `APP_KEY` and a stale `DB_PORT` into the PHP child process.
-Laravel's Dotenv is immutable and will not overwrite them, which produces a
-`MissingAppKeyException` or a wrong-port connection failure.
+shell environment leaks empty `APP_KEY`, a stale `DB_PORT`, `MAIL_MAILER=log` and
+`MAIL_SCHEME=implicit` into the PHP child process. Laravel's Dotenv is immutable and will
+not overwrite them, which produces a `MissingAppKeyException`, a wrong-port connection
+failure, or mail that is written to the log because the `log` mailer was pinned (Symfony
+also rejects any scheme other than `smtp` or `smtps`, so `implicit` makes every send fail).
 
 Start the server with a clean environment. The framework router takes its public path
 from `getcwd()`, so the command must run with `public` as the working directory; running
@@ -72,6 +74,7 @@ it from the repo root with `-t public` makes it require a non-existent root `ind
 ```bash
 cd public
 env -u APP_KEY -u APP_ENV -u DB_PORT -u DB_HOST -u DB_USERNAME -u DB_PASSWORD -u DB_DATABASE \
+  -u MAIL_MAILER -u MAIL_SCHEME \
   php -S 127.0.0.1:8000 ../vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php
 ```
 

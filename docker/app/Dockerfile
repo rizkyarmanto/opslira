@@ -24,6 +24,7 @@ RUN apk add --no-cache \
 RUN docker-php-ext-install \
     pdo_pgsql \
     pgsql \
+    pdo_mysql \
     sockets \
     bcmath \
     intl \
@@ -31,6 +32,25 @@ RUN docker-php-ext-install \
     opcache \
     pcntl \
     gd
+
+# SQL Server target support. pdo_sqlsrv links against the Microsoft ODBC driver,
+# which Microsoft publishes as an Alpine package outside the Alpine repository,
+# so it is fetched and installed with --allow-untrusted. The driver version is
+# pinned because the download URL carries it.
+ARG MSODBCSQL_VERSION=18.7.1.1-1
+RUN set -eux; \
+    case "$(uname -m)" in \
+        x86_64) arch="amd64" ;; \
+        aarch64) arch="arm64" ;; \
+        *) echo "no SQL Server ODBC package for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    apk add --no-cache unixodbc-dev; \
+    curl -fsSL -o /tmp/msodbcsql18.apk \
+        "https://download.microsoft.com/download/ade174b7-8cea-4543-91a6-c33ae320c2f0/msodbcsql18_${MSODBCSQL_VERSION}_${arch}.apk"; \
+    apk add --no-cache --allow-untrusted /tmp/msodbcsql18.apk; \
+    rm -f /tmp/msodbcsql18.apk; \
+    pecl install sqlsrv pdo_sqlsrv; \
+    docker-php-ext-enable sqlsrv pdo_sqlsrv
 
 # Redis extension
 RUN pecl install redis && docker-php-ext-enable redis

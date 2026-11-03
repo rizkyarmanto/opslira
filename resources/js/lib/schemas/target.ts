@@ -27,7 +27,7 @@ export const domainSchema = z.object({
 });
 
 export const databaseSchema = z.object({
-    db_driver: z.enum(['pgsql', 'mysql', 'sqlsrv']).default('pgsql'),
+    db_driver: z.enum(['pgsql', 'mysql', 'mariadb', 'sqlsrv']).default('pgsql'),
     database_name: z.string().min(1),
     query: z.string().default('SELECT 1'),
     collect_connection_stats: z.boolean().default(true),
@@ -37,8 +37,9 @@ export const databaseSchema = z.object({
 export const mailSchema = z.object({
     check_ports: z.record(z.coerce.number()).default({ smtp: 587, imap: 993 }),
     mail_check_mode: z.enum(['smtp', 'imap']).default('smtp'),
+    mail_encryption: z.enum(['auto', 'starttls', 'ssl', 'none']).default('auto'),
     check_dnsbl: z.boolean().default(true),
-    dnsbl_providers: z.array(z.string()).default(['zen.spamcop.net']),
+    dnsbl_providers: z.array(z.string()).default(['zen.spamhaus.org', 'bl.spamcop.net']),
 });
 
 export const s3Schema = z.object({

@@ -12,6 +12,12 @@ use Illuminate\Validation\Rule;
  */
 class StoreTargetRequest extends FormRequest
 {
+    /**
+     * Drivers the DATABASE adapter has a branch for. A typo used to fall through
+     * to the pgsql branch and probe the wrong server.
+     */
+    private const DB_DRIVERS = ['pgsql', 'mysql', 'mariadb', 'sqlsrv'];
+
     public function authorize(): bool
     {
         return true;
@@ -69,11 +75,23 @@ class StoreTargetRequest extends FormRequest
     }
 
     /**
-     * Beszel credentials are XOR: an API token, or both email and password.
+     * Beszel credentials are XOR: an API token, or both email and password. The
+     * database driver is checked here rather than as a rule on
+     * config_payload.db_driver: a nested rule makes Laravel drop the whole
+     * config_payload array from validated(), which would silently discard every
+     * other key the form submitted.
      */
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $validator) {
+            $driver = $this->input('config_payload.db_driver');
+            if ($driver !== null && $driver !== '' && ! in_array((string) $driver, self::DB_DRIVERS, true)) {
+                $validator->errors()->add(
+                    'config_payload.db_driver',
+                    'The database driver must be one of: '.implode(', ', self::DB_DRIVERS).'.',
+                );
+            }
+
             $authType = $this->authType();
             $payload = (array) $this->input('credentials.payload', []);
             if ($authType === 'BESZEL') {

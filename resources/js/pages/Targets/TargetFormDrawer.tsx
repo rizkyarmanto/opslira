@@ -137,6 +137,18 @@ export default function TargetFormDrawer({
     }, [open, editing, reset]);
 
     const targetType = watch('target_type');
+    const timeoutSeconds = watch('timeout_seconds');
+
+    // A Beszel probe makes up to three sequential HTTPS calls (auth, systems,
+    // stats); the 5 s form default cannot cover them on a slow hub, which shows
+    // up as a connection timeout instead of a probe result. Only new targets are
+    // nudged: an edited target keeps the timeout its owner saved.
+    useEffect(() => {
+        if (!open || editing) return;
+        if (targetType === 'BESZEL_SERVER' && Number(timeoutSeconds ?? 0) <= 5) {
+            setValue('timeout_seconds', 15);
+        }
+    }, [open, editing, targetType, timeoutSeconds, setValue]);
 
     const onSubmit = async (values: TargetFormValues) => {
         setSaving(true);
@@ -378,7 +390,16 @@ function DynamicFields({
             { key: 'warn_days_before', label: 'Warn before (days)', type: 'number', placeholder: '14' },
         ],
         DATABASE: [
-            { key: 'db_driver', label: 'Driver', placeholder: 'pgsql, mysql, or sqlsrv' },
+            {
+                key: 'db_driver',
+                label: 'Driver',
+                type: 'select',
+                options: [
+                    { label: 'PostgreSQL', value: 'pgsql' },
+                    { label: 'MySQL / MariaDB', value: 'mysql' },
+                    { label: 'SQL Server', value: 'sqlsrv' },
+                ],
+            },
             { key: 'database_name', label: 'Database name' },
             { key: 'query', label: 'Test query', placeholder: 'SELECT 1' },
             { key: 'collect_connection_stats', label: 'Collect connection stats', type: 'checkbox' },
@@ -391,6 +412,17 @@ function DynamicFields({
                 options: [
                     { label: 'SMTP', value: 'smtp' },
                     { label: 'IMAP', value: 'imap' },
+                ],
+            },
+            {
+                key: 'mail_encryption',
+                label: 'Encryption',
+                type: 'select',
+                options: [
+                    { label: 'Auto (port decides)', value: 'auto' },
+                    { label: 'STARTTLS (587/143)', value: 'starttls' },
+                    { label: 'Implicit TLS (465/993)', value: 'ssl' },
+                    { label: 'None', value: 'none' },
                 ],
             },
             { key: 'check_dnsbl', label: 'Check DNSBL', placeholder: 'true or false' },
