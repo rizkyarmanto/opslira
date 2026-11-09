@@ -81,6 +81,27 @@ class DatabaseActivityService
             $pdo = null;
         }
 
+        return self::formatRows($rows);
+    }
+
+    private static function formatRows(array $rows): array
+    {
+        usort($rows, static function (array $a, array $b): int {
+            $score = static function (array $row): ?float {
+                $state = $row['state_seconds'];
+                $query = $row['query_seconds'];
+
+                return $state === null ? ($query === null ? null : (float) $query)
+                    : ($query === null ? (float) $state : max((float) $state, (float) $query));
+            };
+
+            $aScore = $score($a);
+            $bScore = $score($b);
+
+            return $aScore === null ? ($bScore === null ? 0 : 1)
+                : ($bScore === null ? -1 : $bScore <=> $aScore);
+        });
+
         return array_map(static fn (array $row): array => [
             'username' => $row['username'] === null ? null : (string) $row['username'],
             'database' => $row['database'] === null ? null : (string) $row['database'],

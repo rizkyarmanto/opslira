@@ -686,6 +686,7 @@ function TargetFacts({ target }: { target: Props['target'] }) {
 
 function DatabaseActivity({ targetId }: { targetId: Props['target']['id'] }) {
     const [rows, setRows] = useState<ActivityRow[]>([]);
+    const [page, setPage] = useState(1);
     const [collectedAt, setCollectedAt] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -696,6 +697,7 @@ function DatabaseActivity({ targetId }: { targetId: Props['target']['id'] }) {
         const controller = new AbortController();
         request.current = controller;
         setLoading(true);
+        setPage(1);
         setError(null);
         try {
             const response = await api.get<{ data: ActivityRow[]; collected_at: string }>(
@@ -718,6 +720,8 @@ function DatabaseActivity({ targetId }: { targetId: Props['target']['id'] }) {
         void refresh();
         return () => request.current?.abort();
     }, [refresh]);
+    const pageCount = Math.ceil(rows.length / 5);
+
 
     return (
         <section className="min-w-0 sm:col-span-2" aria-label="Database activity">
@@ -737,6 +741,7 @@ function DatabaseActivity({ targetId }: { targetId: Props['target']['id'] }) {
             ) : rows.length === 0 ? (
                 <p className="py-4 text-xs text-noc-muted">No database sessions found.</p>
             ) : (
+                <>
                 <div className="max-w-full overflow-x-auto">
                     <table className="w-full text-left text-xs">
                         <thead>
@@ -747,7 +752,7 @@ function DatabaseActivity({ targetId }: { targetId: Props['target']['id'] }) {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-noc-border">
-                            {rows.map((row, index) => (
+                            {rows.slice((page - 1) * 5, page * 5).map((row, index) => (
                                 <tr key={index}>
                                     {[row.username, row.database, row.state, row.state_duration, row.query_age].map((value, column) => (
                                         <td key={column} className="whitespace-nowrap px-2 py-2 text-noc-text">{value ?? <NoData />}</td>
@@ -762,6 +767,18 @@ function DatabaseActivity({ targetId }: { targetId: Props['target']['id'] }) {
                         </tbody>
                     </table>
                 </div>
+                {rows.length > 5 && (
+                    <nav aria-label="Database activity pagination" className="mt-3 flex flex-wrap items-center gap-2">
+                        <Button variant="ghost" className="!px-3 !py-1.5 !text-xs" onClick={() => setPage((current) => current - 1)} disabled={page === 1}>
+                            Previous
+                        </Button>
+                        <span className="text-xs text-noc-muted">Page {page} of {pageCount}</span>
+                        <Button variant="ghost" className="!px-3 !py-1.5 !text-xs" onClick={() => setPage((current) => current + 1)} disabled={page === pageCount}>
+                            Next
+                        </Button>
+                    </nav>
+                )}
+                </>
             )}
         </section>
     );

@@ -34,6 +34,8 @@ aktif; izin akun monitoring menentukan sesi dan detail yang terlihat. Durasi sta
 Server merupakan estimasi berdasarkan waktu request terakhir. Teks SQL dapat mengandung
 data sensitif dan terlihat oleh semua pengguna yang dapat mengakses target. PHP memerlukan
 driver PDO yang sesuai dengan mesin database.
+Tabel menampilkan lima sesi per halaman, diurutkan berdasarkan nilai terbesar antara
+durasi state dan usia query, terlama lebih dahulu. Refresh kembali ke halaman pertama.
 
 ## Modul aplikasi (`app/Modules/`)
 
