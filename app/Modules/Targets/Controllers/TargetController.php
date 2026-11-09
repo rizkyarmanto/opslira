@@ -11,6 +11,7 @@ use App\Modules\Targets\Models\TargetCredential;
 use App\Modules\Targets\Requests\StoreTargetRequest;
 use App\Modules\Targets\Requests\UpdateTargetRequest;
 use App\Modules\Targets\Services\CredentialEncryptionService;
+use App\Modules\Targets\Services\DatabaseActivityService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -199,6 +200,24 @@ class TargetController
                 ->limit(self::DEGRADED_LOG_LIMIT)
                 ->get(['id', 'status', 'response_time_ms', 'checked_at', 'error_message']),
         ]);
+    }
+
+    public function databaseActivity(MonitoringTarget $target, DatabaseActivityService $service): JsonResponse
+    {
+        abort_unless($target->target_type === 'DATABASE' && $target->protocol_type === 'DB_NATIVE_PING', 404);
+
+        try {
+            $response = response()->json([
+                'data' => $service->fetch($target),
+                'collected_at' => now()->toIso8601String(),
+            ]);
+        } catch (\Throwable) {
+            $response = response()->json([
+                'message' => 'Could not load database activity. Check the connection and monitoring permissions.',
+            ], 503);
+        }
+
+        return $response->header('Cache-Control', 'no-store');
     }
 
     public function update(UpdateTargetRequest $request, MonitoringTarget $target): JsonResponse

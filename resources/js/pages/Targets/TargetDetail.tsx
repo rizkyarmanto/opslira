@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import ReactECharts from 'echarts-for-react';
@@ -38,6 +38,15 @@ interface DegradedLog {
     checked_at: string;
     error_message: string | null;
 }
+
+type ActivityRow = {
+    username: string | null;
+    database: string | null;
+    state: string | null;
+    state_duration: string | null;
+    query_age: string | null;
+    query_syntax: string | null;
+};
 
 /** Check log views. Checks is the probe feed; Degraded history filters it. */
 const logTabs: Array<{ key: 'checks' | 'degraded'; label: string }> = [
@@ -580,6 +589,9 @@ function TargetFacts({ target }: { target: Props['target'] }) {
                         <SlidingNumber value={num(m.query_exec_ms)} decimals={1} suffix=" ms" />
                     </Fact>
                     <Fact label="Active connections">{num(m.active_connections) ?? <NoData />}</Fact>
+                    {target.protocol_type === 'DB_NATIVE_PING' && (
+                        <DatabaseActivity key={target.id} targetId={target.id} />
+                    )}
                 </div>
             );
 
@@ -670,6 +682,89 @@ function TargetFacts({ target }: { target: Props['target'] }) {
         default:
             return <NoData />;
     }
+}
+
+function DatabaseActivity({ targetId }: { targetId: Props['target']['id'] }) {
+    const [rows, setRows] = useState<ActivityRow[]>([]);
+    const [collectedAt, setCollectedAt] = useState<string | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const request = useRef<AbortController | null>(null);
+
+    const refresh = useCallback(async () => {
+        request.current?.abort();
+        const controller = new AbortController();
+        request.current = controller;
+        setLoading(true);
+        setError(null);
+        try {
+            const response = await api.get<{ data: ActivityRow[]; collected_at: string }>(
+                `/targets/${targetId}/database-activity`, { signal: controller.signal },
+            );
+            if (controller.signal.aborted) return;
+            setRows(response.data.data);
+            setCollectedAt(response.data.collected_at);
+        } catch (err) {
+            if (controller.signal.aborted) return;
+            setRows([]);
+            setCollectedAt(null);
+            setError(apiErrorMessage(err, 'Could not load database activity. Check the connection and monitoring permissions.'));
+        } finally {
+            if (!controller.signal.aborted) setLoading(false);
+        }
+    }, [targetId]);
+
+    useEffect(() => {
+        void refresh();
+        return () => request.current?.abort();
+    }, [refresh]);
+
+    return (
+        <section className="min-w-0 sm:col-span-2" aria-label="Database activity">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h3 className="text-sm font-semibold text-noc-text">Database activity</h3>
+                    {collectedAt && <p className="text-xs text-noc-muted">Collected {formatDateTime(collectedAt)}</p>}
+                </div>
+                <Button variant="ghost" className="!px-3 !py-1.5 !text-xs" onClick={() => void refresh()} disabled={loading}>
+                    Refresh
+                </Button>
+            </div>
+            {loading ? (
+                <p className="py-4 text-xs text-noc-muted">Loading database activity...</p>
+            ) : error ? (
+                <p role="alert" className="py-4 text-xs text-status-down">{error}</p>
+            ) : rows.length === 0 ? (
+                <p className="py-4 text-xs text-noc-muted">No database sessions found.</p>
+            ) : (
+                <div className="max-w-full overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                        <thead>
+                            <tr>
+                                {['Username', 'Database', 'State', 'State duration', 'Query age', 'Query syntax'].map((label) => (
+                                    <th key={label} scope="col" className="field-label whitespace-nowrap px-2 py-2">{label}</th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-noc-border">
+                            {rows.map((row, index) => (
+                                <tr key={index}>
+                                    {[row.username, row.database, row.state, row.state_duration, row.query_age].map((value, column) => (
+                                        <td key={column} className="whitespace-nowrap px-2 py-2 text-noc-text">{value ?? <NoData />}</td>
+                                    ))}
+                                    <td className="px-2 py-2 text-noc-text">
+                                        {row.query_syntax === null ? <NoData /> : (
+                                            <pre className="max-h-32 max-w-xs overflow-auto whitespace-pre-wrap break-words">{row.query_syntax}</pre>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </section>
+    );
 }
 
 function truncate(value: string, limit: number): string {

@@ -27,6 +27,14 @@ Konfigurasi target bersifat polimorfik: satu tabel `monitoring_targets` dengan k
 | S3_STORAGE | S3_HEAD | `S3BucketProbeAdapter` |
 | BESZEL_SERVER | BESZEL_API | `BeszelApiProbeAdapter` |
 
+Target DATABASE dengan protokol DB_NATIVE_PING menampilkan snapshot sesi PostgreSQL,
+MySQL/MariaDB, atau SQL Server pada kartu fakta. Tombol Refresh mengambil snapshot baru
+tanpa polling atau menyimpan teks SQL sebagai riwayat. Snapshot mencakup sesi idle dan
+aktif; izin akun monitoring menentukan sesi dan detail yang terlihat. Durasi state SQL
+Server merupakan estimasi berdasarkan waktu request terakhir. Teks SQL dapat mengandung
+data sensitif dan terlihat oleh semua pengguna yang dapat mengakses target. PHP memerlukan
+driver PDO yang sesuai dengan mesin database.
+
 ## Modul aplikasi (`app/Modules/`)
 
 | Modul | Peran |
